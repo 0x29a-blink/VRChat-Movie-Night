@@ -1,0 +1,62 @@
+# Environment and secrets
+backend/.env
+backend/.venv/
+backend/data/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.pytest_cache/
+backend/*.log
+backend/ytdlp_probe.txt
+backend/ytdlp_err.txt
+backend/probe.mp4
+backend/*.mp4
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/tsconfig.tsbuildinfo
+
+# Downloaded media (keep folder structure via .gitkeep)
+library/youtube/*
+library/m3u8/*
+library/torrents/*
+!library/youtube/.gitkeep
+!library/m3u8/.gitkeep
+!library/torrents/.gitkeep
+
+# MediaMTX runtime logs and local binary (install via scoop or releases — do not commit)
+MediaMTX/mediamtx.log
+MediaMTX/mediamtx.exe
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+*.suo
+*.user
+*.userosscache
+
+# Cursor / AI editor local state (vibe-coding artifacts — never commit)
+.cursor/
+**/.cursor/
+.cursorrules
+.cursorignore
+.cursorindexingignore
+*.cursor-chat
+.cursor-tutor/
+specstory/
+.agent/
+agent-transcripts/
+.continue/
+.windsurf/
+.aider*
+.copilot/
+*.ai.md
+*.aider.*
+
+# Legacy YouTube helper — track only the cmd script
+yt_downloader/*
+!yt_downloader/download.cmd
