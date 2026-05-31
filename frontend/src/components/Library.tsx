@@ -1,0 +1,314 @@
+import { Film, Link2, ListPlus, Loader2, Pencil, Play, RefreshCw, Trash2, Unlink, Youtube, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { api } from "../api";
+import { fmtBytes, fmtDuration } from "../format";
+import type { LibraryItem } from "../types";
+import { AddToWatchlistButton } from "./AddToWatchlist";
+import { ConfirmModal } from "./ConfirmModal";
+import { LinkTmdbModal } from "./LinkTmdbModal";
+import { libraryLinkLabel, watchlistPayloadFromLibraryItem } from "./libraryWatchlist";
+import { usePlayback } from "./PlaybackContext";
+import { useToast } from "./Toast";
+
+const FOLDER_META: Record<string, { label: string; icon: typeof Youtube }> = {
+  youtube: { label: "YouTube", icon: Youtube },
+  m3u8: { label: "M3U8 / Streams", icon: Link2 },
+  torrents: { label: "Movies & Shows", icon: Film },
+};
+
+export function Library({ version }: { version: number }) {
+  const { playFromLibrary, queueFromLibrary } = usePlayback();
+  const { push: pushToast } = useToast();
+  const [data, setData] = useState<Record<string, LibraryItem[]>>({});
+  const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState(false);
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [linkItem, setLinkItem] = useState<LibraryItem | null>(null);
+  const [unlinkBusy, setUnlinkBusy] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<LibraryItem | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const load = () => {
+    api
+      .library()
+      .then(setData)
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(load, [version]);
+
+  const scan = async () => {
+    setScanning(true);
+    try {
+      await api.scanLibrary();
+      setTimeout(() => {
+        load();
+        setScanning(false);
+      }, 1500);
+    } catch {
+      setScanning(false);
+    }
+  };
+
+  const titleFor = (item: LibraryItem) => item.display_title || item.title;
+
+  const addToQueue = (item: LibraryItem) => queueFromLibrary(item);
+  const playNow = (item: LibraryItem) => playFromLibrary(item);
+
+  const remove = async () => {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    try {
+      await api.deleteLibraryItem(deleteTarget.id);
+      setDeleteTarget(null);
+      load();
+    } catch (err: unknown) {
+      pushToast(err instanceof Error ? err.message : "Delete failed", "error");
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
+  const startRename = (item: LibraryItem) => {
+    setRenamingId(item.id);
+    setRenameValue(item.title);
+  };
+
+  const cancelRename = () => {
+    setRenamingId(null);
+    setRenameValue("");
+  };
+
+  const submitRename = async (item: LibraryItem) => {
+    const title = renameValue.trim();
+    if (!title || title === item.title) {
+      cancelRename();
+      return;
+    }
+    setRenameBusy(true);
+    try {
+      await api.renameLibraryItem(item.id, title);
+      cancelRename();
+      load();
+    } catch (err: unknown) {
+      pushToast(err instanceof Error ? err.message : "Rename failed", "error");
+    } finally {
+      setRenameBusy(false);
+    }
+  };
+
+  const unlink = async (item: LibraryItem) => {
+    setUnlinkBusy(item.id);
+    try {
+      await api.unlinkLibraryItem(item.id);
+      load();
+    } catch (err: unknown) {
+      pushToast(err instanceof Error ? err.message : "Unlink failed", "error");
+    } finally {
+      setUnlinkBusy(null);
+    }
+  };
+
+  const posterFor = (item: LibraryItem) => item.poster || item.thumbnail;
+
+  const total = Object.values(data).reduce((n, arr) => n + arr.length, 0);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">Library</h1>
+          <p className="mt-1 text-sm text-slate-400">{total} videos ready to queue.</p>
+        </div>
+        <button onClick={scan} disabled={scanning} className="btn-ghost">
+          <RefreshCw className={`h-4 w-4 ${scanning ? "animate-spin" : ""}`} /> Rescan
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 py-12 text-slate-400">
+          <Loader2 className="h-5 w-5 animate-spin" /> Loading…
+        </div>
+      ) : total === 0 ? (
+        <div className="card p-12 text-center text-slate-500">
+          Nothing here yet. Download something first.
+        </div>
+      ) : (
+        Object.entries(FOLDER_META).map(([key, meta]) => {
+          const items = data[key] || [];
+          if (items.length === 0) return null;
+          const Icon = meta.icon;
+          return (
+            <section key={key} className="space-y-3">
+              <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-400">
+                <Icon className="h-4 w-4" /> {meta.label} · {items.length}
+              </h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                {items.map((item) => (
+                  <div key={item.id} className="card group overflow-hidden">
+                    <div className="relative aspect-video w-full bg-ink-800">
+                      {posterFor(item) ? (
+                        <img src={posterFor(item)} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="grid h-full place-items-center text-slate-600">
+                          <Film className="h-8 w-8" />
+                        </div>
+                      )}
+                      {libraryLinkLabel(item) && (
+                        <span className="absolute left-1.5 top-1.5 chip bg-brand-500/80 text-white">
+                          {libraryLinkLabel(item)}
+                        </span>
+                      )}
+                      <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/60 opacity-0 transition-opacity group-hover:opacity-100">
+                        <button
+                          onClick={() => playNow(item)}
+                          className="btn-primary !px-3 !py-2"
+                          title="Play now"
+                        >
+                          <Play className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => addToQueue(item)}
+                          className="btn-ghost !px-3 !py-2"
+                          title="Add to queue"
+                        >
+                          <ListPlus className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => startRename(item)}
+                          className="btn-ghost !px-3 !py-2"
+                          title="Rename"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteTarget(item)}
+                          className="btn-ghost !px-3 !py-2 text-red-300"
+                          title="Delete"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                      {item.duration > 0 && (
+                        <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[11px]">
+                          {fmtDuration(item.duration)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="p-2.5">
+                      {renamingId === item.id ? (
+                        <form
+                          className="flex items-center gap-1"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            submitRename(item);
+                          }}
+                        >
+                          <input
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            className="input !py-1 !text-xs"
+                            autoFocus
+                            disabled={renameBusy}
+                          />
+                          <button
+                            type="submit"
+                            disabled={renameBusy || !renameValue.trim()}
+                            className="rounded-lg p-1 text-emerald-400 hover:bg-white/10"
+                            title="Save"
+                          >
+                            {renameBusy ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <span className="text-xs font-semibold">OK</span>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelRename}
+                            className="rounded-lg p-1 text-slate-400 hover:bg-white/10"
+                            title="Cancel"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </form>
+                      ) : (
+                        <div
+                          className="truncate text-sm font-medium cursor-pointer hover:text-brand-300"
+                          title={`${titleFor(item)} — click pencil to rename`}
+                          onClick={() => startRename(item)}
+                        >
+                          {titleFor(item)}
+                        </div>
+                      )}
+                      <div className="mt-0.5 text-xs text-slate-500">{fmtBytes(item.size)}</div>
+                      <div className="mt-1.5 flex flex-col gap-1">
+                        {item.linked ? (
+                          <button
+                            type="button"
+                            disabled={unlinkBusy === item.id}
+                            onClick={() => unlink(item)}
+                            className="btn-ghost w-full justify-center py-1 text-[11px] text-slate-400"
+                          >
+                            {unlinkBusy === item.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <>
+                                <Unlink className="h-3 w-3" /> Unlink TMDB
+                              </>
+                            )}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setLinkItem(item)}
+                            className="btn-ghost w-full justify-center py-1 text-[11px]"
+                          >
+                            <Link2 className="h-3 w-3" /> Link to movie/show
+                          </button>
+                        )}
+                        <AddToWatchlistButton
+                          payload={watchlistPayloadFromLibraryItem(item)}
+                          label="Watchlist"
+                          className="btn-ghost w-full justify-center py-1 text-[11px]"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          );
+        })
+      )}
+
+      {linkItem && (
+        <LinkTmdbModal
+          item={linkItem}
+          onClose={() => setLinkItem(null)}
+          onLinked={() => load()}
+        />
+      )}
+
+      <ConfirmModal
+        open={!!deleteTarget}
+        title="Delete from library?"
+        message={
+          deleteTarget ? (
+            <>
+              Permanently delete <span className="font-medium text-white">{titleFor(deleteTarget)}</span> from
+              disk? Watchlist history is kept.
+            </>
+          ) : null
+        }
+        confirmLabel="Delete"
+        danger
+        busy={deleteBusy}
+        onConfirm={remove}
+        onCancel={() => setDeleteTarget(null)}
+      />
+    </div>
+  );
+}

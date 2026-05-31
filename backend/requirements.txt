@@ -1,0 +1,10 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+obsws-python==1.7.2
+httpx==0.28.1
+itsdangerous==2.2.0
+pydantic-settings==2.7.1
+SQLAlchemy==2.0.36
+psutil==6.1.1
+python-multipart==0.0.20
+bcrypt==4.2.1
