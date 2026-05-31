@@ -24,6 +24,7 @@ import { QueuePlayer } from "./components/QueuePlayer";
 import { SettingsPage } from "./components/SettingsPage";
 import { Stats } from "./components/Stats";
 import { ToastProvider, useToast } from "./components/Toast";
+import { WatchlistAddProvider } from "./watchlistAddModal";
 import { Watchlist } from "./components/Watchlist";
 import { fmtMs } from "./format";
 import type { Job, PlayerState, QueueSnapshot, UserInfo } from "./types";
@@ -368,7 +369,9 @@ function AppShell() {
 export default function App() {
   return (
     <ToastProvider>
-      <AppShell />
+      <WatchlistAddProvider>
+        <AppShell />
+      </WatchlistAddProvider>
     </ToastProvider>
   );
 }

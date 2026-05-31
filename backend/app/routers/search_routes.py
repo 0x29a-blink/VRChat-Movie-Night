@@ -2,7 +2,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import auth
-from ..search import aiostreams, tmdb
+from ..search import aiostreams, anime_meta, stremio_streams, tmdb
 
 router = APIRouter(prefix="/api", tags=["search"],
                    dependencies=[Depends(auth.require_auth)])
@@ -36,6 +36,29 @@ async def season_episodes(tmdb_id: int, season: int):
         raise HTTPException(400, str(exc))
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"TMDB request failed: {exc}")
+
+
+@router.get("/streams/stremio")
+async def streams_stremio(
+    video_id: str = Query(..., min_length=3),
+    stremio_id: str | None = Query(None),
+    season: int | None = Query(None),
+    episode: int | None = Query(None),
+):
+    """Streams for Kitsu/MAL/AniList video ids (from meta video.id)."""
+    try:
+        vid = video_id.strip()
+        if not vid and stremio_id:
+            meta = await anime_meta.fetch_stremio_meta(stremio_id.strip())
+            if not meta:
+                raise HTTPException(404, "No meta for anime id")
+            vid = anime_meta.default_video_id(meta, stremio_id.strip(), season, episode)
+        resolved_id, results = await stremio_streams.fetch_streams_for_video_id(vid)
+        return {"video_id": resolved_id, "streams": results}
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"AIOStreams request failed: {exc}") from exc
 
 
 @router.get("/streams")

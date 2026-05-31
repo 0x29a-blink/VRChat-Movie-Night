@@ -13,6 +13,7 @@ import psutil
 from .. import settings_store
 from ..config import settings
 from ..db import SessionLocal
+from ..downloads.iso_extract import extract_disc_image
 from ..downloads.link_meta import DownloadLinkMeta, apply_link_meta_to_job, job_link_meta
 from ..models import Job, LibraryItem
 from ..ws import hub
@@ -27,6 +28,8 @@ PROGRESS_TEMPLATE = (
 )
 
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".ts", ".m4v", ".avi"}
+DISC_IMAGE_EXTS = {".iso", ".img"}
+DOWNLOADABLE_EXTS = VIDEO_EXTS | DISC_IMAGE_EXTS
 # Substrings that mark yt-dlp/ffmpeg temp files (incl. HLS ".part-FragN").
 TEMP_MARKERS = (".part", ".ytdl", ".temp", ".tmp", ".download", "-frag", ".frag")
 
@@ -57,10 +60,24 @@ def _ffmpeg_hls_retryable(err: str) -> bool:
     )
 
 
-def _probe_download_kind(source: str, referer: str) -> str:
+def _suffix_from_name(name: str) -> str:
+    low = (name or "").lower().strip()
+    for ext in sorted(DOWNLOADABLE_EXTS, key=len, reverse=True):
+        if low.endswith(ext):
+            return ext
+    return ""
+
+
+def _is_disc_image(name: str) -> bool:
+    return _suffix_from_name(name) in DISC_IMAGE_EXTS
+
+
+def _probe_download_kind(source: str, referer: str, filename_hint: str = "") -> str:
     """Choose direct HTTP, HLS ffmpeg, or yt-dlp for a URL."""
     if _is_hls_source(source):
         return "hls"
+    if _is_disc_image(filename_hint) or _is_disc_image(source):
+        return "direct"
     low = source.lower()
     if "torbox.app" in low or "torbox." in low:
         return "direct"
@@ -78,14 +95,19 @@ def _probe_download_kind(source: str, referer: str) -> str:
             if "torbox.app" in low or "torbox." in low:
                 return "direct"
             path = urlparse(final).path.lower()
-            if any(path.endswith(ext) for ext in VIDEO_EXTS):
+            if any(path.endswith(ext) for ext in DOWNLOADABLE_EXTS):
                 return "direct"
     except Exception:
         pass
     return "ytdlp"
 
 
-def _ext_from_response(headers: httpx.Headers, url: str) -> str:
+def _ext_from_url_or_hint(
+    headers: httpx.Headers, url: str, filename_hint: str = ""
+) -> str:
+    hint_ext = _suffix_from_name(filename_hint)
+    if hint_ext:
+        return hint_ext
     cd = headers.get("content-disposition") or ""
     m = re.search(
         r"filename\*=(?:UTF-8''|utf-8'')([^;]+)|filename=\"?([^\";]+)",
@@ -95,11 +117,11 @@ def _ext_from_response(headers: httpx.Headers, url: str) -> str:
     if m:
         name = unquote((m.group(1) or m.group(2) or "").strip())
         ext = Path(name).suffix.lower()
-        if ext in VIDEO_EXTS:
+        if ext in DOWNLOADABLE_EXTS:
             return ext
     path = urlparse(url).path
     ext = Path(path).suffix.lower()
-    if ext in VIDEO_EXTS:
+    if ext in DOWNLOADABLE_EXTS:
         return ext
     ct = (headers.get("content-type") or "").lower()
     if "matroska" in ct or "mkv" in ct:
@@ -111,6 +133,7 @@ def _ext_from_response(headers: httpx.Headers, url: str) -> str:
 
 def _safe_filename(name: str) -> str:
     cleaned = _ILLEGAL.sub("", name).strip().rstrip(". ")
+    cleaned = re.sub(r"\[\s*\]", "", cleaned).strip()
     cleaned = cleaned[:120]
     cleaned = cleaned.replace("%", "%%")  # escape for yt-dlp -o template
     return cleaned or "video"
@@ -336,6 +359,16 @@ class DownloadManager:
             if bool(settings_store.get("use_deno", settings.use_deno)):
                 cmd += ["--js-runtimes", "deno"]
         else:  # torrent / direct url (yt-dlp fallback)
+            if type_ == "torrent" and bool(settings_store.get("preserve_torrent_tracks", True)):
+                merger = (
+                    "Merger+ffmpeg_i:-map 0:v:0? -map 0:a? -map 0:s? -c copy -dn -ignore_unknown "
+                    "-fflags +genpts -max_muxing_queue_size 1024"
+                )
+            else:
+                merger = (
+                    "Merger+ffmpeg_i:-map 0:v:0? -map 0:a:0? -sn -dn -ignore_unknown "
+                    "-fflags +genpts -max_muxing_queue_size 1024"
+                )
             cmd += [
                 "--merge-output-format",
                 "mkv",
@@ -343,8 +376,7 @@ class DownloadManager:
                 "mkv",
                 "--hls-use-mpegts",
                 "--postprocessor-args",
-                "Merger+ffmpeg_i:-map 0:v:0? -map 0:a:0? -sn -dn -ignore_unknown "
-                "-fflags +genpts -max_muxing_queue_size 1024",
+                merger,
             ]
         cmd.append(source)
         return cmd
@@ -553,18 +585,41 @@ class DownloadManager:
         out_dir = settings.folder_for(type_)
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        filename_hint = self._cache_meta.get(job_id, {}).get("filename_hint", "")
         try:
-            kind = "hls" if type_ == "m3u8" else await asyncio.to_thread(
-                _probe_download_kind, source, referer
-            )
+            if type_ == "m3u8":
+                kind = "hls"
+            else:
+                kind = await asyncio.to_thread(
+                    _probe_download_kind, source, referer, filename_hint
+                )
+                if kind == "ytdlp" and _is_disc_image(filename_hint):
+                    kind = "direct"
             if kind == "hls":
                 rc, final_path, err = await self._run_hls(
                     job_id, source, out_dir, referer, provided
                 )
             elif kind == "direct":
                 rc, final_path, err = await self._run_direct_http(
-                    job_id, source, out_dir, referer, provided
+                    job_id, source, out_dir, referer, provided, filename_hint
                 )
+                if rc == 0 and final_path and _is_disc_image(final_path):
+                    iso_path = Path(final_path)
+                    with SessionLocal() as s:
+                        job = s.get(Job, job_id)
+                        if job:
+                            job.speed = ""
+                            job.eta = "Extracting…"
+                            s.commit()
+                            await hub.broadcast("download_update", job.to_dict())
+                    rc, final_path, err = await asyncio.to_thread(
+                        extract_disc_image, iso_path
+                    )
+                    if rc == 0:
+                        try:
+                            iso_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
             else:
                 rc, final_path, err = await self._run_ytdlp(
                     job_id, type_, source, out_dir, referer, provided
@@ -746,6 +801,7 @@ class DownloadManager:
         out_dir: Path,
         referer: str,
         provided: str,
+        filename_hint: str = "",
     ) -> tuple[int, str, str]:
         """Download a single file over HTTP(S) without ffmpeg (TorBox CDN, etc.)."""
         headers = {"Referer": referer} if referer else {}
@@ -756,7 +812,9 @@ class DownloadManager:
                     if resp.status_code >= 400:
                         body = await resp.aread()
                         return 1, "", f"HTTP {resp.status_code}: {body[:200]!r}"
-                    ext = _ext_from_response(resp.headers, str(resp.url))
+                    ext = _ext_from_url_or_hint(
+                        resp.headers, str(resp.url), filename_hint
+                    )
                     base = _safe_filename(provided) if provided else "download"
                     out_path = out_dir / f"{base}{ext}"
                     i = 1
@@ -1061,26 +1119,40 @@ class DownloadManager:
         await hub.broadcast("download_update", data)
 
     async def _apply_job_library_link(self, job_id: str, output_path: str) -> None:
-        from ..library.linking import apply_tmdb_link
+        from ..library.linking import apply_anime_link, apply_tmdb_link
 
         path = str(Path(output_path).resolve())
         with SessionLocal() as s:
             job = s.get(Job, job_id)
-            if not job or not job.link_tmdb_id:
+            if not job:
+                return
+            stremio = (job.link_stremio_id or "").strip()
+            if not job.link_tmdb_id and not stremio:
                 return
             lib = s.query(LibraryItem).filter(LibraryItem.path == path).first()
             if not lib:
                 return
             try:
-                await apply_tmdb_link(
-                    s,
-                    lib,
-                    tmdb_id=job.link_tmdb_id,
-                    media_type=job.link_media_type or "movie",
-                    season=job.link_season,
-                    episode=job.link_episode,
-                    watchlist_item_id=job.link_watchlist_id,
-                )
+                if stremio:
+                    await apply_anime_link(
+                        s,
+                        lib,
+                        stremio_id=stremio,
+                        series_title=job.link_series_title or "",
+                        season=job.link_season,
+                        episode=job.link_episode,
+                        watchlist_item_id=job.link_watchlist_id,
+                    )
+                else:
+                    await apply_tmdb_link(
+                        s,
+                        lib,
+                        tmdb_id=job.link_tmdb_id,
+                        media_type=job.link_media_type or "movie",
+                        season=job.link_season,
+                        episode=job.link_episode,
+                        watchlist_item_id=job.link_watchlist_id,
+                    )
                 s.commit()
                 linked_title = lib.display_title()
             except Exception:

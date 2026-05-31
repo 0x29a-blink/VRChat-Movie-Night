@@ -5,6 +5,7 @@ from urllib.parse import quote
 import httpx
 
 from . import catalog, tmdb
+from .anime_meta import is_anime_stremio_id, resolve_anime_title
 from .ids import anilist_id, collection_id, kitsu_id, mal_id
 
 
@@ -14,20 +15,13 @@ async def open_item(stremio_id: str, media_type: str) -> dict:
     if cid is not None:
         return await _open_collection(cid)
 
-    kid = kitsu_id(sid)
-    if kid is not None:
-        title = await _title_from_kitsu(kid)
-        return {"action": "title", "title": await tmdb.resolve_by_name(title, "series")}
-
-    mid = mal_id(sid)
-    if mid is not None:
-        title = await _title_from_mal(mid)
-        return {"action": "title", "title": await tmdb.resolve_by_name(title, "series")}
-
-    aid = anilist_id(sid)
-    if aid is not None:
-        title = await _title_from_anilist(aid)
-        return {"action": "title", "title": await tmdb.resolve_by_name(title, "series")}
+    if is_anime_stremio_id(sid):
+        native = await resolve_anime_title(sid)
+        if native:
+            return {"action": "title", "title": native}
+        title = await _anime_title_fallback(sid)
+        if title:
+            return {"action": "title", "title": await tmdb.resolve_by_name(title, "series")}
 
     # Meta with embedded episode list (some collection pages)
     if sid.startswith("ctmdb"):
@@ -57,13 +51,12 @@ async def _try_fetch_meta(media_type: str, stremio_id: str) -> dict | None:
         encoded = quote(stremio_id, safe="")
         path_type = "anime" if media_type == "anime" else media_type
         for t in (path_type, media_type, "movie", "series"):
-            try:
-                data = await catalog._get_json(f"/meta/{t}/{encoded}.json")
-                meta = data.get("meta")
-                if meta and meta.get("id"):
-                    return meta
-            except httpx.HTTPError:
+            data = await catalog.try_get_json(f"/meta/{t}/{encoded}.json")
+            if not data:
                 continue
+            meta = data.get("meta")
+            if meta and meta.get("id"):
+                return meta
     except Exception:
         pass
     return None
@@ -89,6 +82,19 @@ async def _movies_from_meta_videos(videos: list[dict]) -> list[dict]:
         except Exception:
             continue
     return out
+
+
+async def _anime_title_fallback(stremio_id: str) -> str:
+    kid = kitsu_id(stremio_id)
+    if kid is not None:
+        return await _title_from_kitsu(kid)
+    mid = mal_id(stremio_id)
+    if mid is not None:
+        return await _title_from_mal(mid)
+    aid = anilist_id(stremio_id)
+    if aid is not None:
+        return await _title_from_anilist(aid)
+    return ""
 
 
 async def _title_from_kitsu(kitsu_id: int) -> str:

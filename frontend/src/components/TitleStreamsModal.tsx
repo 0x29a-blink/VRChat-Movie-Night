@@ -45,11 +45,26 @@ export function TitleStreamsModal({
   const [cachedOnly, setCachedOnly] = useState(INITIAL_FILTERS.cachedOnly);
   const [minSeeders, setMinSeeders] = useState(INITIAL_FILTERS.minSeeders);
   const [sortBy, setSortBy] = useState<"quality" | "size" | "seeders">(INITIAL_FILTERS.sortBy);
+  const [audioLang, setAudioLang] = useState(INITIAL_FILTERS.audioLang);
+  const [subtitleType, setSubtitleType] = useState(INITIAL_FILTERS.subtitleType);
+  const [preferDub, setPreferDub] = useState(INITIAL_FILTERS.preferDub);
+  const [searchText, setSearchText] = useState("");
   const [downloadQueued, setDownloadQueued] = useState(false);
 
   useEffect(() => {
-    saveStreamFilters({ minRes, codec, maxSize, cachedOnly, minSeeders, sortBy });
-  }, [minRes, codec, maxSize, cachedOnly, minSeeders, sortBy]);
+    saveStreamFilters({
+      searchText,
+      minRes,
+      codec,
+      maxSize,
+      cachedOnly,
+      minSeeders,
+      sortBy,
+      audioLang,
+      subtitleType,
+      preferDub,
+    });
+  }, [searchText, minRes, codec, maxSize, cachedOnly, minSeeders, sortBy, audioLang, subtitleType, preferDub]);
 
   useEffect(() => {
     if (!open || !target) return;
@@ -223,23 +238,31 @@ export function TitleStreamsModal({
   const filtered = useMemo(
     () =>
       filterAndSortStreams(streams, {
+        searchText,
         minRes,
         codec,
         maxSize,
         cachedOnly,
         minSeeders,
         sortBy,
+        audioLang,
+        subtitleType,
+        preferDub,
       }),
-    [streams, minRes, codec, maxSize, cachedOnly, minSeeders, sortBy]
+    [streams, searchText, minRes, codec, maxSize, cachedOnly, minSeeders, sortBy, audioLang, subtitleType, preferDub]
   );
 
   const updateFilters = (patch: Partial<typeof INITIAL_FILTERS>) => {
+    if (patch.searchText !== undefined) setSearchText(patch.searchText);
     if (patch.minRes !== undefined) setMinRes(patch.minRes);
     if (patch.codec !== undefined) setCodec(patch.codec);
     if (patch.maxSize !== undefined) setMaxSize(patch.maxSize);
     if (patch.cachedOnly !== undefined) setCachedOnly(patch.cachedOnly);
     if (patch.minSeeders !== undefined) setMinSeeders(patch.minSeeders);
     if (patch.sortBy !== undefined) setSortBy(patch.sortBy);
+    if (patch.audioLang !== undefined) setAudioLang(patch.audioLang);
+    if (patch.subtitleType !== undefined) setSubtitleType(patch.subtitleType);
+    if (patch.preferDub !== undefined) setPreferDub(patch.preferDub);
   };
 
   if (!open || !target) return null;
@@ -402,7 +425,18 @@ export function TitleStreamsModal({
               grabbed={grabbed}
               onGrabCached={grabCached}
               onGrabCache={grabCache}
-              filters={{ minRes, codec, maxSize, cachedOnly, minSeeders, sortBy }}
+              filters={{
+                searchText,
+                minRes,
+                codec,
+                maxSize,
+                cachedOnly,
+                minSeeders,
+                sortBy,
+                audioLang,
+                subtitleType,
+                preferDub,
+              }}
               onFiltersChange={updateFilters}
             />
           )}

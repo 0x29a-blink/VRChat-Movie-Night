@@ -1,5 +1,6 @@
 import json
 import random
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session
 from .. import auth
 from ..db import get_db
 from ..library.matching import find_library_for_watchlist_item
-from ..search import tmdb
+from ..search import anime_meta, tmdb
 from ..models import (
     LibraryItem,
     User,
@@ -40,6 +41,7 @@ def _item_base(item: WatchlistItem) -> dict:
         "parent_id": item.parent_id,
         "kind": item.kind,
         "tmdb_id": item.tmdb_id,
+        "stremio_id": (item.stremio_id or "").strip() or None,
         "media_type": item.media_type,
         "season": item.season,
         "episode": item.episode,
@@ -163,20 +165,41 @@ def _upsert_user_watched(db: Session, user_id: int, item_id: int, watched: bool)
     row.watched_at = _now() if watched else None
 
 
+_CONTAINER_KINDS = frozenset({"series", "collection"})
+
+
 def _user_root_watched(
     db: Session,
     user_id: int,
     item: WatchlistItem,
     children: list[WatchlistItem] | None = None,
+    nested_by_parent: dict[int, list[WatchlistItem]] | None = None,
 ) -> bool:
-    """Whether this user has finished the title (movie, series, or all tracked episodes)."""
+    """Whether this user has finished the title (movie, series, collection, or all tracked episodes)."""
     if item.kind == "series":
         if _user_watched_item(db, user_id, item.id):
             return True
-        eps = children if children is not None else _series_children(db, item.id)
+        eps = children if children is not None else _direct_children(db, item.id)
         if eps:
             return all(_user_watched_item(db, user_id, c.id) for c in eps)
         return False
+    if item.kind == "collection":
+        if _user_watched_item(db, user_id, item.id):
+            return True
+        kids = children if children is not None else _direct_children(db, item.id)
+        if not kids:
+            return False
+        if nested_by_parent is None:
+            series_ids = [c.id for c in kids if c.kind == "series"]
+            nested_by_parent = _children_by_parent(db, series_ids) if series_ids else {}
+        for child in kids:
+            if child.kind == "series":
+                eps = nested_by_parent.get(child.id, [])
+                if not _user_root_watched(db, user_id, child, eps):
+                    return False
+            elif not _user_watched_item(db, user_id, child.id):
+                return False
+        return True
     return _user_watched_item(db, user_id, item.id)
 
 
@@ -192,11 +215,16 @@ def _counts_for_roots(
     user_id: int,
     roots: list[WatchlistItem],
     by_parent: dict[int, list[WatchlistItem]],
+    nested_by_parent: dict[int, list[WatchlistItem]] | None = None,
 ) -> dict[str, int]:
     counts = {"to_watch": 0, "watched": 0}
     for item in roots:
-        children = by_parent.get(item.id, []) if item.kind == "series" else []
-        if _user_root_watched(db, user_id, item, children):
+        children = by_parent.get(item.id, []) if item.kind in _CONTAINER_KINDS else []
+        nested = nested_by_parent
+        if item.kind == "collection" and nested is None:
+            series_ids = [c.id for c in children if c.kind == "series"]
+            nested = _children_by_parent(db, series_ids) if series_ids else {}
+        if _user_root_watched(db, user_id, item, children, nested):
             counts["watched"] += 1
         else:
             counts["to_watch"] += 1
@@ -210,29 +238,78 @@ def _group_counts(db: Session, group_id: int | None, user_id: int) -> dict[str, 
     else:
         q = q.filter(WatchlistItem.group_id == group_id)
     roots = q.order_by(WatchlistItem.sort_order, WatchlistItem.id).all()
-    series_ids = [i.id for i in roots if i.kind == "series"]
-    by_parent = _children_by_parent(db, series_ids)
-    return _counts_for_roots(db, user_id, roots, by_parent)
+    by_parent, nested = _container_children_maps(db, roots)
+    return _counts_for_roots(db, user_id, roots, by_parent, nested)
 
 
-def _series_children(db: Session, series_id: int) -> list[WatchlistItem]:
+def _direct_children(db: Session, parent_id: int) -> list[WatchlistItem]:
     return (
         db.query(WatchlistItem)
-        .filter(WatchlistItem.parent_id == series_id)
-        .order_by(WatchlistItem.season, WatchlistItem.episode, WatchlistItem.sort_order)
+        .filter(WatchlistItem.parent_id == parent_id)
+        .order_by(
+            WatchlistItem.sort_order,
+            WatchlistItem.season,
+            WatchlistItem.episode,
+            WatchlistItem.id,
+        )
         .all()
     )
 
 
-def _series_children_batch(db: Session, series_ids: list[int]) -> list[WatchlistItem]:
-    if not series_ids:
+def _direct_children_batch(db: Session, parent_ids: list[int]) -> list[WatchlistItem]:
+    if not parent_ids:
         return []
     return (
         db.query(WatchlistItem)
-        .filter(WatchlistItem.parent_id.in_(series_ids))
-        .order_by(WatchlistItem.season, WatchlistItem.episode, WatchlistItem.sort_order)
+        .filter(WatchlistItem.parent_id.in_(parent_ids))
+        .order_by(
+            WatchlistItem.sort_order,
+            WatchlistItem.season,
+            WatchlistItem.episode,
+            WatchlistItem.id,
+        )
         .all()
     )
+
+
+def _series_children(db: Session, series_id: int) -> list[WatchlistItem]:
+    return _direct_children(db, series_id)
+
+
+def _series_children_batch(db: Session, series_ids: list[int]) -> list[WatchlistItem]:
+    return _direct_children_batch(db, series_ids)
+
+
+def _container_children_maps(
+    db: Session, roots: list[WatchlistItem]
+) -> tuple[dict[int, list[WatchlistItem]], dict[int, list[WatchlistItem]]]:
+    container_ids = [i.id for i in roots if i.kind in _CONTAINER_KINDS]
+    by_parent = _children_by_parent(db, container_ids)
+    series_child_ids = [
+        c.id for kids in by_parent.values() for c in kids if c.kind == "series"
+    ]
+    nested = _children_by_parent(db, series_child_ids) if series_child_ids else {}
+    return by_parent, nested
+
+
+def _enrich_container_children(
+    db: Session,
+    children_raw: list[WatchlistItem],
+    user_id: int,
+    all_users: list[User],
+    by_parent: dict[int, list[WatchlistItem]] | None = None,
+) -> list[dict]:
+    series_ids = [c.id for c in children_raw if c.kind == "series"]
+    by_episodes = by_parent if by_parent is not None else _children_by_parent(db, series_ids)
+    out: list[dict] = []
+    for child in children_raw:
+        if child.kind == "series":
+            eps_raw = by_episodes.get(child.id, [])
+            eps = [_enrich_item(db, e, user_id, all_users) for e in eps_raw]
+            out.append(_enrich_item(db, child, user_id, all_users, eps))
+        else:
+            out.append(_enrich_item(db, child, user_id, all_users))
+    return out
 
 
 def _user_watched_item(db: Session, user_id: int, item_id: int) -> bool:
@@ -267,6 +344,11 @@ def _item_ids_for_section_sync(db: Session, item: WatchlistItem) -> list[int]:
     ids = [item.id]
     if item.kind == "series":
         ids.extend(r.id for r in _series_children(db, item.id))
+    elif item.kind == "collection":
+        for child in _direct_children(db, item.id):
+            ids.append(child.id)
+            if child.kind == "series":
+                ids.extend(r.id for r in _series_children(db, child.id))
     return ids
 
 
@@ -281,8 +363,10 @@ class GroupPatch(BaseModel):
 
 
 class ItemCreate(BaseModel):
-    kind: str = Field(pattern="^(movie|series|episode)$")
+    kind: str = Field(pattern="^(movie|series|episode|collection)$")
     tmdb_id: int | None = None
+    stremio_id: str | None = None
+    series_title: str | None = None
     media_type: str = "movie"
     season: int | None = None
     episode: int | None = None
@@ -299,6 +383,16 @@ class ItemCreate(BaseModel):
 
 class EpisodeBulk(BaseModel):
     episodes: list[dict]
+
+
+class SeasonsBulk(BaseModel):
+    seasons: list[int] = Field(min_length=1)
+
+
+class LinkTmdbCatalogBody(BaseModel):
+    tmdb_id: int
+    media_type: str = Field(default="series", pattern="^(movie|series)$")
+    update_display: bool = True
 
 
 class ItemPatch(BaseModel):
@@ -443,9 +537,8 @@ def group_items(
         .order_by(WatchlistItem.sort_order, WatchlistItem.id)
         .all()
     )
-    series_ids = [i.id for i in all_roots if i.kind == "series"]
-    by_parent = _children_by_parent(db, series_ids)
-    counts = _counts_for_roots(db, user.id, all_roots, by_parent)
+    by_parent, nested = _container_children_maps(db, all_roots)
+    counts = _counts_for_roots(db, user.id, all_roots, by_parent, nested)
 
     if section:
         if section not in ("to_watch", "watched"):
@@ -454,7 +547,10 @@ def group_items(
         items = [
             i
             for i in all_roots
-            if _user_root_watched(db, user.id, i, by_parent.get(i.id, [])) == want_watched
+            if _user_root_watched(
+                db, user.id, i, by_parent.get(i.id, []), nested if i.kind == "collection" else None
+            )
+            == want_watched
         ]
     else:
         items = all_roots
@@ -465,8 +561,17 @@ def group_items(
     result = []
     for root in roots:
         children_raw = by_parent.get(root.id, [])
-        children = [_enrich_item(db, c, user.id, all_users) for c in children_raw]
-        result.append(_enrich_item(db, root, user.id, all_users, children if root.kind == "series" else None))
+        if root.kind in _CONTAINER_KINDS:
+            children = _enrich_container_children(
+                db,
+                children_raw,
+                user.id,
+                all_users,
+                nested if root.kind == "collection" else None,
+            )
+            result.append(_enrich_item(db, root, user.id, all_users, children))
+        else:
+            result.append(_enrich_item(db, root, user.id, all_users))
 
     return {"items": result, "counts": counts}
 
@@ -503,6 +608,96 @@ def _find_series(db: Session, tmdb_id: int, group_id: int | None) -> WatchlistIt
     else:
         q = q.filter(WatchlistItem.group_id == group_id)
     return q.first()
+
+
+def _find_series_by_stremio(db: Session, stremio_id: str, group_id: int | None) -> WatchlistItem | None:
+    sid = (stremio_id or "").strip()
+    if not sid:
+        return None
+    q = db.query(WatchlistItem).filter(
+        WatchlistItem.kind == "series",
+        WatchlistItem.stremio_id == sid,
+        WatchlistItem.parent_id.is_(None),
+    )
+    if group_id is None:
+        q = q.filter(WatchlistItem.group_id.is_(None))
+    else:
+        q = q.filter(WatchlistItem.group_id == group_id)
+    return q.first()
+
+
+def _find_collection(db: Session, tmdb_id: int, group_id: int | None) -> WatchlistItem | None:
+    q = db.query(WatchlistItem).filter(
+        WatchlistItem.kind == "collection",
+        WatchlistItem.tmdb_id == tmdb_id,
+        WatchlistItem.parent_id.is_(None),
+    )
+    if group_id is None:
+        q = q.filter(WatchlistItem.group_id.is_(None))
+    else:
+        q = q.filter(WatchlistItem.group_id == group_id)
+    return q.first()
+
+
+def _series_title_from_payload(body: ItemCreate) -> str:
+    if body.series_title and body.series_title.strip():
+        return body.series_title.strip()
+    title = (body.title or "").strip()
+    m = re.match(r"^(.*?)\s+S\d", title, re.I)
+    if m:
+        return m.group(1).strip()
+    if " — " in title:
+        return title.split(" — ", 1)[0].strip()
+    return title
+
+
+def _episode_row_title(body: ItemCreate, season: int, episode: int) -> str:
+    title = (body.title or "").strip()
+    if title and not re.match(r"^S\d+E\d+", title, re.I):
+        return title
+    return f"S{season:02d}E{episode:02d}"
+
+
+def _ensure_series_parent(db: Session, body: ItemCreate, group_id: int | None, list_section: str) -> WatchlistItem:
+    """Find or create root series row for an episode add."""
+    parent: WatchlistItem | None = None
+    tmdb_id = body.tmdb_id if body.tmdb_id else None
+    stremio = (body.stremio_id or "").strip()
+
+    if tmdb_id:
+        parent = _find_series(db, tmdb_id, group_id)
+    if not parent and stremio:
+        parent = _find_series_by_stremio(db, stremio, group_id)
+
+    series_name = _series_title_from_payload(body)
+
+    if not parent:
+        sort = _next_sort(db, group_id, None, list_section)
+        parent = WatchlistItem(
+            group_id=group_id,
+            kind="series",
+            tmdb_id=tmdb_id,
+            stremio_id=stremio,
+            media_type="series",
+            title=series_name,
+            poster=body.poster,
+            year=body.year,
+            overview=body.overview or "",
+            list_section=list_section,
+            sort_order=sort,
+        )
+        db.add(parent)
+        db.flush()
+    elif series_name and parent.title != series_name:
+        # Fix legacy rows that used an episode label as the series title.
+        if " — " in parent.title or parent.title.startswith("S"):
+            parent.title = series_name
+        if stremio and not parent.stremio_id:
+            parent.stremio_id = stremio
+        if body.poster and not parent.poster:
+            parent.poster = body.poster
+
+    return parent
 
 
 def _insert_episodes(db: Session, parent: WatchlistItem, episodes: list[dict]) -> list[WatchlistItem]:
@@ -565,6 +760,13 @@ def _series_response(db: Session, series: WatchlistItem, user_id: int) -> dict:
     return _enrich_item(db, series, user_id, all_users, children)
 
 
+def _collection_response(db: Session, collection: WatchlistItem, user_id: int) -> dict:
+    all_users = db.query(User).all()
+    children_raw = _direct_children(db, collection.id)
+    children = _enrich_container_children(db, children_raw, user_id, all_users)
+    return _enrich_item(db, collection, user_id, all_users, children)
+
+
 @router.post("/items")
 async def create_item(
     body: ItemCreate,
@@ -573,46 +775,88 @@ async def create_item(
 ):
     if body.group_id is not None and not db.get(WatchlistGroup, body.group_id):
         raise HTTPException(400, "Invalid group_id")
+
+    if body.kind == "collection":
+        if not body.tmdb_id:
+            raise HTTPException(400, "collection requires tmdb_id (TMDB collection id)")
+        existing = _find_collection(db, body.tmdb_id, body.group_id)
+        if existing:
+            return _collection_response(db, existing, user.id)
+        try:
+            data = await tmdb.collection_movies(body.tmdb_id)
+        except Exception as exc:
+            raise HTTPException(502, f"Could not load collection from TMDB: {exc}") from exc
+        list_section = body.list_section
+        sort = _next_sort(db, body.group_id, None, list_section)
+        collection = WatchlistItem(
+            group_id=body.group_id,
+            kind="collection",
+            tmdb_id=body.tmdb_id,
+            media_type="collection",
+            title=(data.get("name") or body.title or "").strip(),
+            poster=data.get("poster") or body.poster or "",
+            overview=(data.get("overview") or body.overview or "").strip(),
+            list_section=list_section,
+            sort_order=sort,
+        )
+        db.add(collection)
+        db.flush()
+        for i, movie in enumerate(data.get("movies") or []):
+            tmdb_id = movie.get("tmdb_id")
+            if not tmdb_id:
+                continue
+            child = WatchlistItem(
+                group_id=body.group_id,
+                parent_id=collection.id,
+                kind="movie",
+                tmdb_id=tmdb_id,
+                media_type="movie",
+                title=(movie.get("title") or "").strip(),
+                poster=movie.get("poster") or "",
+                year=str(movie.get("year") or ""),
+                overview=(movie.get("overview") or "").strip(),
+                list_section=list_section,
+                sort_order=i + 1,
+            )
+            db.add(child)
+        db.commit()
+        db.refresh(collection)
+        return _collection_response(db, collection, user.id)
+
     if body.parent_id is not None:
         parent = db.get(WatchlistItem, body.parent_id)
-        if not parent or parent.kind != "series":
-            raise HTTPException(400, "parent_id must reference a series item")
+        if not parent:
+            raise HTTPException(400, "Invalid parent_id")
+        if body.kind == "episode":
+            if parent.kind != "series":
+                raise HTTPException(400, "parent_id must reference a series item")
+        elif parent.kind != "collection":
+            raise HTTPException(400, "parent_id must reference a collection item")
 
     parent_id = body.parent_id
     group_id = body.group_id
     list_section = body.list_section
 
-    if body.kind == "series" and body.tmdb_id:
-        existing = _find_series(db, body.tmdb_id, group_id)
+    if body.parent_id and body.kind in ("movie", "series"):
+        parent = db.get(WatchlistItem, body.parent_id)
+        if parent:
+            group_id = parent.group_id
+            list_section = parent.list_section
+
+    if body.kind == "series" and not body.parent_id:
+        existing = None
+        if body.tmdb_id:
+            existing = _find_series(db, body.tmdb_id, group_id)
+        if not existing and (body.stremio_id or "").strip():
+            existing = _find_series_by_stremio(db, body.stremio_id or "", group_id)
         if existing:
-            await _sync_series_episodes_from_tmdb(db, existing)
+            if body.tmdb_id and not (body.stremio_id or "").strip():
+                await _sync_series_episodes_from_tmdb(db, existing)
             db.commit()
             return _series_response(db, existing, user.id)
 
-    if body.kind == "episode" and not parent_id and body.tmdb_id:
-        parent = (
-            db.query(WatchlistItem)
-            .filter(
-                WatchlistItem.kind == "series",
-                WatchlistItem.tmdb_id == body.tmdb_id,
-                WatchlistItem.parent_id.is_(None),
-            )
-            .first()
-        )
-        if not parent:
-            parent = WatchlistItem(
-                group_id=group_id,
-                kind="series",
-                tmdb_id=body.tmdb_id,
-                media_type="series",
-                title=body.title.split(" S")[0] if body.title else "",
-                poster=body.poster,
-                year=body.year,
-                list_section=list_section,
-                sort_order=_next_sort(db, group_id, None, list_section),
-            )
-            db.add(parent)
-            db.flush()
+    if body.kind == "episode" and not parent_id:
+        parent = _ensure_series_parent(db, body, group_id, list_section)
         parent_id = parent.id
         if group_id is None:
             group_id = parent.group_id
@@ -635,6 +879,22 @@ async def create_item(
     sort = _next_sort(db, group_id, parent_id, list_section)
     overview = body.overview
     air_date = body.air_date
+    title = body.title
+    stremio_id = (body.stremio_id or "").strip()
+    tmdb_id = body.tmdb_id if body.tmdb_id else None
+
+    if body.kind == "series":
+        title = _series_title_from_payload(body) or title
+        stremio_id = (body.stremio_id or "").strip()
+
+    if body.kind == "episode" and body.season is not None and body.episode is not None:
+        title = _episode_row_title(body, body.season, body.episode)
+        if parent_id:
+            parent = db.get(WatchlistItem, parent_id)
+            if parent:
+                stremio_id = stremio_id or (parent.stremio_id or "").strip()
+                tmdb_id = tmdb_id or parent.tmdb_id
+
     if body.kind == "movie" and body.tmdb_id and not overview:
         try:
             info = await tmdb.details(body.tmdb_id, "movie")
@@ -646,11 +906,12 @@ async def create_item(
         group_id=group_id,
         parent_id=parent_id,
         kind=body.kind,
-        tmdb_id=body.tmdb_id,
+        tmdb_id=tmdb_id,
+        stremio_id=stremio_id if body.kind == "series" else "",
         media_type=body.media_type,
         season=body.season,
         episode=body.episode,
-        title=body.title,
+        title=title,
         poster=body.poster,
         year=body.year,
         overview=overview,
@@ -662,15 +923,180 @@ async def create_item(
     db.add(item)
     db.flush()
 
-    if item.kind == "series" and item.tmdb_id:
+    # Bulk TMDB episode import only for root-level series (not under a collection).
+    if (
+        item.kind == "series"
+        and item.tmdb_id
+        and not parent_id
+        and not (body.stremio_id or "").strip()
+    ):
         await _sync_series_episodes_from_tmdb(db, item)
 
     db.commit()
     db.refresh(item)
     if item.kind == "series":
         return _series_response(db, item, user.id)
+    if item.parent_id:
+        parent = db.get(WatchlistItem, item.parent_id)
+        if parent and parent.kind == "collection":
+            return _collection_response(db, parent, user.id)
     all_users = db.query(User).all()
     return _enrich_item(db, item, user.id, all_users)
+
+
+def _episode_dict_from_row(season: int, ep: dict) -> dict:
+    ep_num = ep.get("episode_number") or ep.get("episode")
+    name = (ep.get("name") or "").strip()
+    title = f"{ep_num}. {name}" if name and ep_num else (name or f"S{season}E{ep_num}")
+    return {
+        "season": season,
+        "episode": ep_num,
+        "title": title,
+        "still": ep.get("still") or "",
+        "overview": ep.get("overview") or "",
+        "air_date": ep.get("air_date") or "",
+    }
+
+
+async def _catalog_episodes_for_season(parent: WatchlistItem, season: int) -> list[dict]:
+    if parent.tmdb_id:
+        try:
+            rows = await tmdb.season_episodes(parent.tmdb_id, season)
+            if rows:
+                return [
+                    _episode_dict_from_row(season, ep)
+                    for ep in rows
+                    if ep.get("episode_number") is not None
+                ]
+        except Exception:
+            pass
+    stremio = (parent.stremio_id or "").strip()
+    if stremio:
+        meta = await anime_meta.fetch_stremio_meta(stremio)
+        if meta:
+            return [
+                _episode_dict_from_row(season, ep)
+                for ep in anime_meta.episodes_for_season(meta, season)
+                if ep.get("episode_number") is not None
+            ]
+    return []
+
+
+async def _season_catalog_for_series(db: Session, parent: WatchlistItem) -> list[dict]:
+    on_list: dict[int, int] = {}
+    for c in _series_children(db, parent.id):
+        if c.season is not None:
+            on_list[c.season] = on_list.get(c.season, 0) + 1
+
+    catalog: list[dict] = []
+    if parent.tmdb_id:
+        try:
+            info = await tmdb.details(parent.tmdb_id, "series")
+            for row in info.get("seasons") or []:
+                sn = row.get("season_number")
+                if sn is None:
+                    continue
+                catalog.append(
+                    {
+                        "season_number": sn,
+                        "name": row.get("name") or f"Season {sn}",
+                        "episode_count": row.get("episode_count") or 0,
+                        "on_watchlist": on_list.get(sn, 0),
+                    }
+                )
+            if catalog:
+                return catalog
+        except Exception:
+            pass
+    stremio = (parent.stremio_id or "").strip()
+    if stremio:
+        meta = await anime_meta.fetch_stremio_meta(stremio)
+        if meta:
+            for row in anime_meta.seasons_from_meta(meta):
+                sn = row["season_number"]
+                catalog.append(
+                    {
+                        "season_number": sn,
+                        "name": row.get("name") or f"Season {sn}",
+                        "episode_count": row.get("episode_count") or 0,
+                        "on_watchlist": on_list.get(sn, 0),
+                    }
+                )
+            if catalog:
+                return catalog
+    if not catalog and on_list:
+        for sn in sorted(on_list.keys()):
+            catalog.append(
+                {
+                    "season_number": sn,
+                    "name": f"Season {sn}",
+                    "episode_count": on_list[sn],
+                    "on_watchlist": on_list[sn],
+                }
+            )
+    return catalog
+
+
+@router.get("/items/{series_id}/season-catalog")
+async def series_season_catalog(
+    series_id: int,
+    db: Session = Depends(get_db),
+    user: auth.CurrentUser = Depends(auth.require_auth),
+):
+    parent = db.get(WatchlistItem, series_id)
+    if not parent or parent.kind != "series":
+        raise HTTPException(400, "Not a series item")
+    seasons = await _season_catalog_for_series(db, parent)
+    source = "watchlist_only"
+    if parent.tmdb_id and seasons:
+        source = "tmdb"
+    elif (parent.stremio_id or "").strip() and seasons:
+        source = "anime"
+    return {
+        "seasons": seasons,
+        "stremio_id": (parent.stremio_id or "").strip() or None,
+        "tmdb_id": parent.tmdb_id,
+        "catalog_source": source,
+    }
+
+
+@router.post("/items/{series_id}/link-tmdb-catalog")
+async def link_series_tmdb_catalog(
+    series_id: int,
+    body: LinkTmdbCatalogBody,
+    db: Session = Depends(get_db),
+    user: auth.CurrentUser = Depends(auth.require_auth),
+):
+    """Attach a TMDB series for season/episode lists; keeps stremio_id for AIOStreams streams."""
+    parent = db.get(WatchlistItem, series_id)
+    if not parent or parent.kind != "series":
+        raise HTTPException(400, "Not a series item")
+    if body.media_type != "series":
+        raise HTTPException(400, "Only TV series can be linked for season catalogs")
+
+    try:
+        info = await tmdb.details(body.tmdb_id, "series")
+    except Exception as exc:
+        raise HTTPException(400, f"TMDB lookup failed: {exc}") from exc
+
+    parent.tmdb_id = body.tmdb_id
+    parent.media_type = "series"
+    if body.update_display:
+        parent.title = info.get("title") or parent.title
+        parent.poster = info.get("poster") or parent.poster
+        parent.year = info.get("year") or parent.year
+        if info.get("overview"):
+            parent.overview = info["overview"]
+
+    for child in _series_children(db, parent.id):
+        child.tmdb_id = body.tmdb_id
+        child.media_type = "series"
+
+    db.commit()
+    return {
+        "series": _series_response(db, parent, user.id),
+        "catalog_source": "tmdb",
+    }
 
 
 @router.post("/items/{series_id}/episodes")
@@ -690,6 +1116,39 @@ def add_episodes(
         "created": [
             _enrich_item(db, i, user.id, all_users) for i in created
         ]
+    }
+
+
+@router.post("/items/{series_id}/add-seasons")
+async def add_seasons_to_watchlist(
+    series_id: int,
+    body: SeasonsBulk,
+    db: Session = Depends(get_db),
+    user: auth.CurrentUser = Depends(auth.require_auth),
+):
+    parent = db.get(WatchlistItem, series_id)
+    if not parent or parent.kind != "series":
+        raise HTTPException(400, "Not a series item")
+    if not parent.tmdb_id and not (parent.stremio_id or "").strip():
+        raise HTTPException(
+            400,
+            "This series has no TMDB or anime id — add episodes individually from Search.",
+        )
+
+    payload: list[dict] = []
+    for season in sorted({int(s) for s in body.seasons}):
+        payload.extend(await _catalog_episodes_for_season(parent, season))
+
+    if not payload:
+        raise HTTPException(404, "No episodes found for the selected season(s).")
+
+    created = _insert_episodes(db, parent, payload)
+    db.commit()
+    skipped = len(payload) - len(created)
+    return {
+        "added": len(created),
+        "skipped_duplicates": skipped,
+        "series": _series_response(db, parent, user.id),
     }
 
 
@@ -746,13 +1205,22 @@ def delete_item(item_id: int, db: Session = Depends(get_db)):
     item = db.get(WatchlistItem, item_id)
     if not item:
         raise HTTPException(404, "Item not found")
-    child_ids = [c.id for c in db.query(WatchlistItem).filter(WatchlistItem.parent_id == item_id).all()]
-    for cid in child_ids + [item_id]:
+
+    def collect_ids(pid: int) -> list[int]:
+        ids = [pid]
+        for child in db.query(WatchlistItem).filter(WatchlistItem.parent_id == pid).all():
+            ids.extend(collect_ids(child.id))
+        return ids
+
+    all_ids = collect_ids(item_id)
+    for cid in all_ids:
         db.query(UserWatchStatus).filter(UserWatchStatus.item_id == cid).delete()
         db.query(UserRating).filter(UserRating.item_id == cid).delete()
         db.query(WatchlistComment).filter(WatchlistComment.item_id == cid).delete()
-    db.query(WatchlistItem).filter(WatchlistItem.parent_id == item_id).delete()
-    db.delete(item)
+    for cid in reversed(all_ids):
+        row = db.get(WatchlistItem, cid)
+        if row:
+            db.delete(row)
     db.commit()
     return {"ok": True}
 
@@ -791,6 +1259,12 @@ def set_watched(
     if item.kind == "series":
         for child in _series_children(db, item.id):
             _upsert_user_watched(db, user.id, child.id, body.watched)
+    elif item.kind == "collection":
+        for child in _direct_children(db, item.id):
+            _upsert_user_watched(db, user.id, child.id, body.watched)
+            if child.kind == "series":
+                for ep in _series_children(db, child.id):
+                    _upsert_user_watched(db, user.id, ep.id, body.watched)
     elif item.parent_id:
         _sync_series_from_episodes(db, item.parent_id)
     db.commit()
@@ -907,10 +1381,11 @@ def wheel_spin(
         candidates = [c for c in candidates if c.id in allowed]
 
     filtered: list[WatchlistItem] = []
-    series_ids = [c.id for c in candidates if c.kind == "series"]
-    by_parent = _children_by_parent(db, series_ids)
+    by_parent, nested = _container_children_maps(db, candidates)
     for c in candidates:
-        watched = _user_root_watched(db, user.id, c, by_parent.get(c.id, []))
+        watched = _user_root_watched(
+            db, user.id, c, by_parent.get(c.id, []), nested if c.kind == "collection" else None
+        )
         if watched and not body.include_watched_by_me:
             continue
         if not watched and not body.include_unwatched_by_me:
@@ -1041,18 +1516,29 @@ def _collect_unwatched_library(db: Session, group_id: int, user_id: int) -> list
     out: list[tuple[int, str]] = []
     for root in _group_roots(db, group_id):
         if root.kind == "series":
-            children = (
-                db.query(WatchlistItem)
-                .filter_by(parent_id=root.id)
-                .order_by(WatchlistItem.sort_order, WatchlistItem.id)
-                .all()
-            )
+            children = _series_children(db, root.id)
             for child in children:
                 if _user_watched(db, user_id, child.id):
                     continue
                 lib = _find_library_match(db, child)
                 if lib:
                     out.append((lib["id"], child.title or root.title))
+        elif root.kind == "collection":
+            by_parent, nested = _container_children_maps(db, [root])
+            for child in by_parent.get(root.id, []):
+                if child.kind == "series":
+                    for ep in nested.get(child.id, []):
+                        if _user_watched(db, user_id, ep.id):
+                            continue
+                        lib = _find_library_match(db, ep)
+                        if lib:
+                            out.append((lib["id"], ep.title or child.title))
+                else:
+                    if _user_watched(db, user_id, child.id):
+                        continue
+                    lib = _find_library_match(db, child)
+                    if lib:
+                        out.append((lib["id"], child.title or root.title))
         else:
             if _user_watched(db, user_id, root.id):
                 continue

@@ -1,4 +1,4 @@
-import { CheckCircle2, Copy, Download, Loader2, Save, Trash2, Upload, UserPlus, Wifi, XCircle } from "lucide-react";
+import { CheckCircle2, Copy, Download, Loader2, RotateCw, Save, Trash2, Upload, UserPlus, Wifi, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { buildHlsUrl, copyHlsUrl, resolveHlsUrl } from "../hlsUrl";
@@ -243,6 +243,7 @@ export function SettingsPage({ user }: { user: UserInfo }) {
   const [saved, setSaved] = useState(false);
   const [testResult, setTestResult] = useState<{ connected: boolean; error?: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [aiostreamsBusy, setAiostreamsBusy] = useState(false);
 
   const [pw, setPw] = useState("");
   const [pwMsg, setPwMsg] = useState("");
@@ -299,6 +300,35 @@ export function SettingsPage({ user }: { user: UserInfo }) {
     setPw("");
     setPwMsg("Password updated.");
     setTimeout(() => setPwMsg(""), 2500);
+  };
+
+  const reloadAiostreams = async () => {
+    setAiostreamsBusy(true);
+    try {
+      const r = await api.reloadAiostreamsConfig();
+      setS((prev) => (prev ? { ...prev, ...r } : prev));
+      pushToast(
+        r.discovered ? "Reloaded AIOStreams config from local install" : "No local AIOStreams config found",
+        r.discovered ? "success" : "error"
+      );
+    } catch (e: unknown) {
+      pushToast(e instanceof Error ? e.message : "Reload failed", "error");
+    } finally {
+      setAiostreamsBusy(false);
+    }
+  };
+
+  const resetAiostreamsAuto = async () => {
+    setAiostreamsBusy(true);
+    try {
+      const next = await api.resetAiostreamsAuto();
+      setS(next);
+      pushToast("Switched to auto-detected AIOStreams URL", "success");
+    } catch (e: unknown) {
+      pushToast(e instanceof Error ? e.message : "Reset failed", "error");
+    } finally {
+      setAiostreamsBusy(false);
+    }
   };
 
   return (
@@ -420,14 +450,80 @@ export function SettingsPage({ user }: { user: UserInfo }) {
             placeholder="from themoviedb.org"
           />
         </Field>
-        <Field label="AIOStreams base URL">
-          <input
-            className="input"
-            value={s.aiostreams_base}
-            onChange={(e) => update({ aiostreams_base: e.target.value })}
-            placeholder="https://aiostreams.elfhosted.com/stremio/<config>"
-          />
-          <p className="mt-1 text-xs text-slate-500">Your manifest URL with "/manifest.json" removed.</p>
+        <Field label="AIOStreams">
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={aiostreamsBusy}
+                onClick={resetAiostreamsAuto}
+                className={s.aiostreams_auto ? "btn-primary text-sm" : "btn-ghost border border-white/10 text-sm"}
+              >
+                Auto-detect (local)
+              </button>
+              <button
+                type="button"
+                disabled={aiostreamsBusy}
+                onClick={() => update({ aiostreams_auto: false })}
+                className={!s.aiostreams_auto ? "btn-primary text-sm" : "btn-ghost border border-white/10 text-sm"}
+              >
+                Manual URL
+              </button>
+              {s.aiostreams_auto && (
+                <button
+                  type="button"
+                  disabled={aiostreamsBusy}
+                  onClick={reloadAiostreams}
+                  className="btn-ghost border border-white/10 text-sm"
+                >
+                  {aiostreamsBusy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RotateCw className="h-4 w-4" />
+                  )}
+                  Reload config
+                </button>
+              )}
+            </div>
+
+            {s.aiostreams_auto ? (
+              <div className="rounded-lg bg-black/20 px-3 py-2 text-xs text-slate-400">
+                <span className="text-slate-500">Discovered from </span>
+                <code className="text-slate-300">AIOStreams\</code>
+                <span className="text-slate-500">:</span>
+                <div className="mt-1 break-all font-mono text-slate-300">
+                  {s.aiostreams_base_discovered || "Not found — start AIOStreams and save /stremio/configure"}
+                </div>
+              </div>
+            ) : (
+              <>
+                <input
+                  className="input"
+                  value={s.aiostreams_base}
+                  onChange={(e) => update({ aiostreams_base: e.target.value, aiostreams_auto: false })}
+                  placeholder="https://aiostreams.elfhosted.com/stremio/<config>"
+                />
+                <p className="text-xs text-slate-500">
+                  Remote or third-party manifest base URL (without "/manifest.json"). Click Save settings below.
+                </p>
+                <button
+                  type="button"
+                  disabled={aiostreamsBusy}
+                  onClick={resetAiostreamsAuto}
+                  className="btn-ghost border border-white/10 text-sm"
+                >
+                  Reset to auto-detect
+                </button>
+              </>
+            )}
+
+            <div className="text-xs text-slate-500">
+              Currently used for search/streams:{" "}
+              <span className="break-all font-mono text-emerald-300/90">
+                {s.aiostreams_base_effective || "Not configured"}
+              </span>
+            </div>
+          </div>
         </Field>
         <Field label="TorBox API key">
           <input
@@ -480,6 +576,19 @@ export function SettingsPage({ user }: { user: UserInfo }) {
           />
           Use Deno JS runtime for yt-dlp (YouTube)
         </label>
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
+          <input
+            type="checkbox"
+            checked={s.preserve_torrent_tracks !== false}
+            onChange={(e) => update({ preserve_torrent_tracks: e.target.checked })}
+            className="h-4 w-4 rounded accent-brand-500"
+          />
+          Keep all audio &amp; subtitle tracks in torrent downloads (default on)
+        </label>
+        <p className="text-xs text-slate-500">
+          Off = yt-dlp keeps one audio track and drops subtitles (smaller file, no track picker). M3U8/YouTube
+          unchanged.
+        </p>
       </Section>
 
       <div className="flex items-center gap-3">

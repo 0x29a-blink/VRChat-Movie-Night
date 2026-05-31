@@ -35,7 +35,11 @@ export interface LibraryItem {
   tmdb_poster?: string;
   tmdb_year?: string;
   episode_title?: string;
+  stremio_id?: string | null;
   linked?: boolean;
+  playback_audio_index?: number | null;
+  playback_subtitle_index?: number | null;
+  playback_burn_subtitles?: boolean;
   added_at: string;
 }
 
@@ -72,10 +76,15 @@ export interface SearchResult {
   overview: string;
   poster: string;
   rating: number;
+  /** kitsu:…, mal:…, anilist:… when opened via AIOStreams meta */
+  stremio_id?: string;
+  anime_native?: boolean;
 }
 
 export interface DownloadLinkMeta {
-  tmdb_id: number;
+  tmdb_id?: number;
+  stremio_id?: string;
+  series_title?: string;
   media_type: "movie" | "series";
   season?: number;
   episode?: number;
@@ -139,9 +148,41 @@ export interface StreamResult {
   playable: boolean;
   cacheable: boolean;
   playback_cacheable?: boolean;
+  audio_lang: string;
+  subtitle_type: string;
+  lang_tags: string[];
+  audio_lang_rank: number;
+  languages: string[];
+  subtitle_langs: string[];
+  audio_tags: string[];
+  visual_tags: string[];
+  release_group: string;
+  network: string;
+  indexer: string;
   magnet: string;
   info_hash: string;
   file_idx: number | null;
+}
+
+export interface MediaStreamTrack {
+  index: number;
+  codec: string;
+  language: string;
+  title: string;
+  label: string;
+  audio_index?: number;
+  subtitle_index?: number;
+}
+
+export interface LibraryTracksResponse {
+  item_id: number;
+  path: string;
+  playback_audio_index: number | null;
+  playback_subtitle_index: number | null;
+  playback_burn_subtitles: boolean;
+  audio: MediaStreamTrack[];
+  subtitles: MediaStreamTrack[];
+  error?: string;
 }
 
 export interface Settings {
@@ -151,7 +192,10 @@ export interface Settings {
   obs_media_input: string;
   obs_scene: string;
   tmdb_api_key: string;
+  aiostreams_auto: boolean;
   aiostreams_base: string;
+  aiostreams_base_effective: string;
+  aiostreams_base_discovered: string;
   torbox_api_key: string;
   max_concurrent_downloads: number;
   use_deno: boolean;
@@ -161,6 +205,7 @@ export interface Settings {
   obs_media_volume: number;
   hls_public_host: string;
   hls_stream_path: string;
+  preserve_torrent_tracks?: boolean;
 }
 
 export interface PreflightStatus {
@@ -245,8 +290,9 @@ export interface WatchlistItem {
   id: number;
   group_id: number | null;
   parent_id: number | null;
-  kind: "movie" | "series" | "episode";
+  kind: "movie" | "series" | "episode" | "collection";
   tmdb_id: number | null;
+  stremio_id?: string | null;
   media_type: string;
   season: number | null;
   episode: number | null;
@@ -286,6 +332,8 @@ export interface TmdbEpisode {
   overview: string;
   air_date: string;
   still: string;
+  /** Stremio video id for AIOStreams stream lookup (anime) */
+  video_stremio_id?: string;
 }
 
 export interface StatsTitle {

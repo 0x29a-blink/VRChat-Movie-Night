@@ -42,6 +42,11 @@ export function StreamResultRow({
             {stream.filename}
           </div>
         )}
+        {stream.filename?.toLowerCase().endsWith(".iso") && (
+          <div className="mt-0.5 text-[10px] text-amber-400/90">
+            Disc image (.iso) — often a game installer, not a movie. Prefer .mkv or .mp4 streams.
+          </div>
+        )}
         <div className="mt-1 flex flex-wrap gap-1.5 text-[11px]">
           {stream.provider && !stream.name.includes(stream.provider) && (
             <span className="chip bg-white/5 text-slate-400">{stream.provider}</span>
@@ -49,6 +54,37 @@ export function StreamResultRow({
           {stream.codec && <span className="chip bg-white/5 text-slate-400">{stream.codec}</span>}
           {stream.hdr && <span className="chip bg-fuchsia-500/15 text-fuchsia-300">{stream.hdr}</span>}
           {stream.source && <span className="chip bg-white/5 text-slate-400">{stream.source}</span>}
+          {stream.languages && stream.languages.length > 0 && (
+            <span className="chip bg-emerald-500/10 text-emerald-300" title="Audio languages (AIOStreams)">
+              🌎 {stream.languages.join(" | ")}
+            </span>
+          )}
+          {stream.subtitle_langs && stream.subtitle_langs.length > 0 && (
+            <span className="chip bg-amber-500/10 text-amber-200" title="Subtitle languages (AIOStreams)">
+              📝 {stream.subtitle_langs.join(" | ")}
+            </span>
+          )}
+          {stream.release_group && (
+            <span className="chip bg-white/5 text-slate-400">{stream.release_group}</span>
+          )}
+          {(stream.lang_tags || []).map((tag) => (
+            <span
+              key={tag}
+              className={`chip ${
+                tag === "Dub"
+                  ? "bg-sky-500/15 text-sky-300"
+                  : tag === "Sub"
+                    ? "bg-violet-500/15 text-violet-300"
+                    : tag === "Dual"
+                      ? "bg-indigo-500/15 text-indigo-300"
+                      : tag === "Hardsub"
+                        ? "bg-rose-500/15 text-rose-300"
+                        : "bg-teal-500/15 text-teal-300"
+              }`}
+            >
+              {tag}
+            </span>
+          ))}
           {stream.size_gb > 0 && (
             <span className="chip bg-white/5 text-slate-400">{stream.size_gb} GB</span>
           )}

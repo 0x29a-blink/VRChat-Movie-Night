@@ -35,6 +35,7 @@ Webapp ──(obs-websocket :4455)──> OBS ──(RTMP :1935)──> MediaMTX
 - `aria2c` is **optional** (not required; downloads use yt-dlp's native downloader)
 - OBS 28+ with **Tools → WebSocket Server Settings → Enable** (port `4455`)
 - MediaMTX for RTMP → HLS relay (`scoop install mediamtx` or place `mediamtx.exe` in `MediaMTX/`)
+- **AIOStreams (self-hosted, recommended for torrent search):** Node.js **24+**, Git, and pnpm 11 (installed automatically by setup script). Public instances disable Torrentio and built-in search addons; your own instance unlocks them.
 
 ## First-time setup
 
@@ -45,17 +46,34 @@ Webapp ──(obs-websocket :4455)──> OBS ──(RTMP :1935)──> MediaMTX
   - On first run, `bootstrap.py` creates an admin user from `APP_PASSWORD` — sign in, then create
   accounts for friends on **Settings → Users** and change the admin password.
   - Paste your **TMDB API key** if it isn't picked up from your environment.
-2. Build the frontend (once, and after any UI change):
+2. **Self-host AIOStreams from source** (recommended — unlocks Torrentio, built-in indexers, no public rate limits):
+   ```
+   AIOStreams\setup-aiostreams.cmd
+   ```
+   This clones [Viren070/AIOStreams](https://github.com/Viren070/AIOStreams), runs `pnpm install`, `pnpm run build`, and creates `AIOStreams\.env` with a generated `SECRET_KEY`. Requires Node.js 24+ and Git on PATH.
+
+   Start the addon (or use `start-movie-night.cmd`, which launches it automatically once built):
+   ```
+   AIOStreams\start-aiostreams.cmd
+   ```
+   Open **[http://localhost:3000/stremio/configure](http://localhost:3000/stremio/configure)** → enable marketplace addons and built-ins (Knaben, Zilean, Torrentio, etc.) → add your **TorBox** API key → save.
+
+   Copy your Stremio manifest URL, remove `/manifest.json`, and paste into **Settings → AIOStreams base URL** (e.g. `http://localhost:3000/stremio/<your-config-id>`). **Or leave that field blank** — Movie Night auto-detects it from your local `AIOStreams\` install (reads `BASE_URL` + the saved configure UUID from SQLite). The same TorBox key goes in Movie Night Settings for cache-and-download.
+
+   To update after upstream releases: re-run `AIOStreams\setup-aiostreams.cmd` (pulls latest, rebuilds). Do not change `SECRET_KEY` in `AIOStreams\.env` or existing addon configs become unreadable.
+
+   Upstream docs: [Deployment from source](https://docs.aiostreams.viren070.me/getting-started/deployment/#from-source)
+3. Build the frontend (once, and after any UI change):
   ```
    build-frontend.cmd
   ```
-3. Start everything:
+4. Start everything:
   ```
    start-movie-night.cmd
   ```
-   This opens MediaMTX (port 8888) and the web app (port 8000) in separate windows.
-4. Open **[http://localhost:8000](http://localhost:8000)** (or `http://<your-ip>:8000` from another machine) and sign in.
-5. Open the **Movie Night** sidebar tab and confirm the checklist is green before guests arrive.
+   This opens MediaMTX (port 8888), AIOStreams (port 3000, if built), and the web app (port 8000) in separate windows.
+5. Open **[http://localhost:8000](http://localhost:8000)** (or `http://<your-ip>:8000` from another machine) and sign in.
+6. Open the **Movie Night** sidebar tab and confirm the checklist is green before guests arrive.
 
 ### Firewall ports (if friends connect from other PCs)
 
@@ -63,6 +81,7 @@ Webapp ──(obs-websocket :4455)──> OBS ──(RTMP :1935)──> MediaMTX
 | Port | Service                                              |
 | ---- | ---------------------------------------------------- |
 | 8000 | Web app + API                                        |
+| 3000 | AIOStreams (self-hosted torrent search; optional)    |
 | 8888 | MediaMTX HLS (VRChat stream URL)                     |
 | 1935 | RTMP ingest (OBS → MediaMTX, usually localhost only) |
 | 4455 | OBS WebSocket (usually localhost only)               |
@@ -125,7 +144,8 @@ media_server_player/
   frontend/           React + Vite + Tailwind UI
   library/            youtube/  m3u8/  torrents/   (downloaded files)
   MediaMTX/           MediaMTX config (install mediamtx via scoop or releases locally)
-  start-movie-night.cmd   MediaMTX + web app (recommended)
+  AIOStreams/         Self-hosted AIOStreams from source (setup-aiostreams.cmd)
+  start-movie-night.cmd   MediaMTX + AIOStreams + web app (recommended)
   start.cmd           web app only
   start-mediamtx.cmd  MediaMTX only
   build-frontend.cmd  run-dev.cmd
@@ -151,7 +171,7 @@ amounts, HLS public host, and user accounts live (no restart needed).
 the wrong address for the VRChat HLS URL.
 - Admins can **export a JSON backup** (Settings → Backup) of watchlist data, ratings, and settings.
 - AIOStreams returns thousands of streams; use the filter sidebar (resolution, codec, max
-size, cached-only) to find the best one fast.
+size, cached-only) to find the best one fast. Self-hosting (`AIOStreams\setup-aiostreams.cmd`) enables Torrentio and built-in indexers that public instances disable.
 - WebSocket events refresh the library and watchlist when downloads finish or library items change;
   toasts notify when linked downloads complete. The sidebar shows live-update connection status.
 - Run `build-frontend.cmd` before `start.cmd` in production — `frontend/dist/` is not committed; CI builds it on push.

@@ -31,6 +31,8 @@ def _migrate_schema() -> None:
             conn.execute(text("ALTER TABLE watchlist_items ADD COLUMN overview TEXT DEFAULT ''"))
         if "air_date" not in cols:
             conn.execute(text("ALTER TABLE watchlist_items ADD COLUMN air_date VARCHAR DEFAULT ''"))
+        if "stremio_id" not in cols:
+            conn.execute(text("ALTER TABLE watchlist_items ADD COLUMN stremio_id VARCHAR DEFAULT ''"))
 
     if insp.has_table("library_items"):
         lib_cols = {c["name"] for c in insp.get_columns("library_items")}
@@ -43,6 +45,10 @@ def _migrate_schema() -> None:
             ("tmdb_poster", "VARCHAR DEFAULT ''"),
             ("tmdb_year", "VARCHAR DEFAULT ''"),
             ("episode_title", "VARCHAR DEFAULT ''"),
+            ("playback_audio_index", "INTEGER"),
+            ("playback_subtitle_index", "INTEGER"),
+            ("playback_burn_subtitles", "BOOLEAN DEFAULT 0"),
+            ("stremio_id", "VARCHAR DEFAULT ''"),
         ]
         with engine.begin() as conn:
             for name, col_type in lib_migrations:
@@ -57,6 +63,8 @@ def _migrate_schema() -> None:
             ("link_season", "INTEGER"),
             ("link_episode", "INTEGER"),
             ("link_watchlist_id", "INTEGER"),
+            ("link_stremio_id", "VARCHAR DEFAULT ''"),
+            ("link_series_title", "VARCHAR DEFAULT ''"),
         ]
         with engine.begin() as conn:
             for name, col_type in job_migrations:

@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { AddToWatchlistButton } from "./AddToWatchlist";
 import { Browse } from "./Browse";
-import { downloadLinkMetaFromSearch, watchlistPayloadFromSearch } from "./downloadLinkMeta";
+import { downloadLinkMetaFromAnime, downloadLinkMetaFromSearch } from "./downloadLinkMeta";
+import { watchlistPayloadFromSearch } from "./watchlistPayload";
 import { InLibraryChip } from "./InLibraryChip";
 import { ManualStreamForm } from "./ManualStreamForm";
 import { StreamResultsPanel } from "./StreamFiltersPanel";
@@ -57,13 +58,29 @@ export function Search({
   const [cachedOnly, setCachedOnly] = useState(INITIAL_FILTERS.cachedOnly);
   const [minSeeders, setMinSeeders] = useState(INITIAL_FILTERS.minSeeders);
   const [sortBy, setSortBy] = useState<"quality" | "size" | "seeders">(INITIAL_FILTERS.sortBy);
+  const [audioLang, setAudioLang] = useState(INITIAL_FILTERS.audioLang);
+  const [subtitleType, setSubtitleType] = useState(INITIAL_FILTERS.subtitleType);
+  const [preferDub, setPreferDub] = useState(INITIAL_FILTERS.preferDub);
+  const [searchText, setSearchText] = useState("");
   const [downloadQueued, setDownloadQueued] = useState(false);
   const [libraryMatch, setLibraryMatch] = useState<LibraryItem | null>(null);
+  const [activeVideoId, setActiveVideoId] = useState("");
   const processedLaunch = useRef(false);
 
   useEffect(() => {
-    saveStreamFilters({ minRes, codec, maxSize, cachedOnly, minSeeders, sortBy });
-  }, [minRes, codec, maxSize, cachedOnly, minSeeders, sortBy]);
+    saveStreamFilters({
+      searchText,
+      minRes,
+      codec,
+      maxSize,
+      cachedOnly,
+      minSeeders,
+      sortBy,
+      audioLang,
+      subtitleType,
+      preferDub,
+    });
+  }, [searchText, minRes, codec, maxSize, cachedOnly, minSeeders, sortBy, audioLang, subtitleType, preferDub]);
 
   const applyStreamLaunch = async (launch: StreamLaunch) => {
     if (launch.source === "stremio") {
@@ -157,7 +174,34 @@ export function Search({
     setEpisodes([]);
     setDownloadQueued(false);
     setLibraryMatch(null);
+    setActiveVideoId("");
     setError("");
+
+    if (r.type === "series" && r.anime_native && r.stremio_id) {
+      try {
+        const d = await api.animeMeta(r.stremio_id);
+        setSeasons(d.seasons || []);
+        if (opts?.season != null) {
+          setLoadingEpisodes(true);
+          try {
+            const epRes = await api.animeSeasonEpisodes(r.stremio_id, opts.season);
+            setEpisodes(epRes.episodes);
+            const ep = epRes.episodes.find((e) => e.episode_number === opts.episode);
+            if (ep?.video_stremio_id) setActiveVideoId(ep.video_stremio_id);
+          } catch {
+            setEpisodes([]);
+          } finally {
+            setLoadingEpisodes(false);
+          }
+          if (opts.episode != null) {
+            await loadStreams(r, opts.season, opts.episode);
+          }
+        }
+      } catch {
+        setError("Could not load anime metadata from AIOStreams.");
+      }
+      return;
+    }
 
     if (r.type === "series") {
       try {
@@ -196,8 +240,29 @@ export function Search({
     }
     const activeSeason = selected.type === "series" ? season : undefined;
     const activeEpisode = selected.type === "series" && season != null && episode != null ? episode : undefined;
+    if (selected.anime_native && selected.stremio_id) {
+      api
+        .libraryMatch({
+          mediaType: "series",
+          stremioId: selected.stremio_id,
+          season: activeSeason,
+          episode: activeEpisode,
+        })
+        .then((r) => setLibraryMatch(r.match))
+        .catch(() => setLibraryMatch(null));
+      return;
+    }
+    if (!selected.tmdb_id) {
+      setLibraryMatch(null);
+      return;
+    }
     api
-      .libraryMatch(selected.tmdb_id, selected.type, activeSeason, activeEpisode)
+      .libraryMatch({
+        mediaType: selected.type,
+        tmdbId: selected.tmdb_id,
+        season: activeSeason,
+        episode: activeEpisode,
+      })
       .then((r) => setLibraryMatch(r.match))
       .catch(() => setLibraryMatch(null));
   }, [selected, season, episode]);
@@ -207,11 +272,17 @@ export function Search({
     setEpisode(undefined);
     setStreams([]);
     setEpisodes([]);
+    setActiveVideoId("");
     if (!selected) return;
     setLoadingEpisodes(true);
     try {
-      const r = await api.seasonEpisodes(selected.tmdb_id, seasonNum);
-      setEpisodes(r.episodes);
+      if (selected.anime_native && selected.stremio_id) {
+        const r = await api.animeSeasonEpisodes(selected.stremio_id, seasonNum);
+        setEpisodes(r.episodes);
+      } else {
+        const r = await api.seasonEpisodes(selected.tmdb_id, seasonNum);
+        setEpisodes(r.episodes);
+      }
     } catch {
       setEpisodes([]);
     } finally {
@@ -221,6 +292,7 @@ export function Search({
 
   const pickEpisode = (ep: TmdbEpisode) => {
     setEpisode(ep.episode_number);
+    setActiveVideoId(ep.video_stremio_id || "");
     setStreams([]);
     setStreamsFetched(false);
   };
@@ -232,7 +304,17 @@ export function Search({
     setError("");
     setStreams([]);
     try {
-      const res = await api.streams(r.tmdb_id, r.type, s, ep);
+      let res;
+      if (r.anime_native && r.stremio_id) {
+        const epRow = episodes.find((e) => e.episode_number === ep);
+        const videoId = activeVideoId || epRow?.video_stremio_id || "";
+        if (!videoId && s != null && ep != null) {
+          throw new Error("No episode video id from AIOStreams meta — pick an episode again.");
+        }
+        res = await api.streamsStremio(videoId, r.stremio_id, s, ep);
+      } else {
+        res = await api.streams(r.tmdb_id, r.type, s, ep);
+      }
       if (reqId !== streamsRequest.current) return;
       setStreams(res.streams);
     } catch (err: unknown) {
@@ -248,12 +330,11 @@ export function Search({
 
   const currentLinkMeta = () => {
     if (!selected) return undefined;
-    return downloadLinkMetaFromSearch(
-      selected.tmdb_id,
-      selected.type,
-      season,
-      episode
-    );
+    if (selected.anime_native && selected.stremio_id) {
+      return downloadLinkMetaFromAnime(selected, season, episode);
+    }
+    if (!selected.tmdb_id) return undefined;
+    return downloadLinkMetaFromSearch(selected.tmdb_id, selected.type, season, episode);
   };
 
   const grabCached = async (s: StreamResult) => {
@@ -299,23 +380,31 @@ export function Search({
   const filtered = useMemo(
     () =>
       filterAndSortStreams(streams, {
+        searchText,
         minRes,
         codec,
         maxSize,
         cachedOnly,
         minSeeders,
         sortBy,
+        audioLang,
+        subtitleType,
+        preferDub,
       }),
-    [streams, minRes, codec, maxSize, cachedOnly, minSeeders, sortBy]
+    [streams, searchText, minRes, codec, maxSize, cachedOnly, minSeeders, sortBy, audioLang, subtitleType, preferDub]
   );
 
   const updateFilters = (patch: Partial<typeof INITIAL_FILTERS>) => {
+    if (patch.searchText !== undefined) setSearchText(patch.searchText);
     if (patch.minRes !== undefined) setMinRes(patch.minRes);
     if (patch.codec !== undefined) setCodec(patch.codec);
     if (patch.maxSize !== undefined) setMaxSize(patch.maxSize);
     if (patch.cachedOnly !== undefined) setCachedOnly(patch.cachedOnly);
     if (patch.minSeeders !== undefined) setMinSeeders(patch.minSeeders);
     if (patch.sortBy !== undefined) setSortBy(patch.sortBy);
+    if (patch.audioLang !== undefined) setAudioLang(patch.audioLang);
+    if (patch.subtitleType !== undefined) setSubtitleType(patch.subtitleType);
+    if (patch.preferDub !== undefined) setPreferDub(patch.preferDub);
   };
 
   return (
@@ -454,22 +543,19 @@ export function Search({
             )}
             <div className="flex-1">
               <h3 className="text-lg font-semibold">
-                {selected.title} <span className="text-slate-500">{selected.year}</span>
+                {selected.title}{" "}
+                {selected.anime_native && (
+                  <span className="chip bg-violet-500/15 text-violet-300">AIOStreams</span>
+                )}{" "}
+                <span className="text-slate-500">{selected.year}</span>
               </h3>
               <p className="mt-1 line-clamp-3 max-w-xl text-sm text-slate-400">{selected.overview}</p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 {libraryMatch && <InLibraryChip />}
                 <TitleMediaActions libraryMatch={libraryMatch} />
                 <AddToWatchlistButton
-                  payload={{
-                    kind: selected.type === "series" ? "series" : "movie",
-                    tmdb_id: selected.tmdb_id,
-                    media_type: selected.type,
-                    title: selected.title,
-                    poster: selected.poster,
-                    year: selected.year,
-                    overview: selected.overview,
-                  }}
+                  payload={watchlistPayloadFromSearch(selected)}
+                  label={selected.type === "series" ? "Add series" : "Add to watchlist"}
                 />
                 {selected.type === "movie" && (
                   <button
@@ -552,21 +638,15 @@ export function Search({
                           <p className="mt-0.5 line-clamp-2 text-[10px] text-slate-400">{ep.overview}</p>
                         </div>
                       </button>
-                      {selected && season && (
+                      {selected && season != null && (
                         <AddToWatchlistButton
-                          payload={{
-                            kind: "episode",
-                            tmdb_id: selected.tmdb_id,
-                            media_type: "series",
+                          payload={watchlistPayloadFromSearch(
+                            selected,
                             season,
-                            episode: ep.episode_number,
-                            title: `${selected.title} S${season}E${ep.episode_number} — ${ep.name}`,
-                            poster: ep.still || selected.poster,
-                            year: selected.year,
-                            overview: ep.overview,
-                            air_date: ep.air_date,
-                          }}
-                          label="Add"
+                            ep.episode_number,
+                            ep
+                          )}
+                          label="Add ep"
                           className="btn-ghost shrink-0 self-start px-2 py-1 text-[10px]"
                         />
                       )}
@@ -596,7 +676,18 @@ export function Search({
               grabbed={grabbed}
               onGrabCached={grabCached}
               onGrabCache={grabCache}
-              filters={{ minRes, codec, maxSize, cachedOnly, minSeeders, sortBy }}
+              filters={{
+                searchText,
+                minRes,
+                codec,
+                maxSize,
+                cachedOnly,
+                minSeeders,
+                sortBy,
+                audioLang,
+                subtitleType,
+                preferDub,
+              }}
               onFiltersChange={updateFilters}
             />
           )}
@@ -612,8 +703,15 @@ export function Search({
                 <p className="text-xs text-slate-400">Save this title to your watchlist to track ratings and group progress.</p>
               </div>
               <AddToWatchlistButton
-                payload={watchlistPayloadFromSearch(selected, season, episode)}
-                label="Add to watchlist"
+                payload={
+                  watchlistPayloadFromSearch(
+                    selected,
+                    season,
+                    episode,
+                    episodes.find((e) => e.episode_number === episode)
+                  ) ?? watchlistPayloadFromSearch(selected)
+                }
+                label={season != null && episode != null ? "Add episode" : "Add to watchlist"}
                 className="btn-primary text-xs"
               />
             </div>

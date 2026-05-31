@@ -1,3 +1,4 @@
+import json
 from urllib.parse import quote
 
 import httpx
@@ -14,7 +15,7 @@ def _base() -> str:
     return base.rstrip("/")
 
 
-async def _get_json(path: str) -> dict:
+async def _get_response(path: str) -> httpx.Response:
     base = _base()
     if not base:
         raise RuntimeError("AIOStreams base URL is not configured (Settings page).")
@@ -22,7 +23,38 @@ async def _get_json(path: str) -> dict:
     async with httpx.AsyncClient(follow_redirects=True) as client:
         resp = await client.get(url, timeout=60)
         resp.raise_for_status()
-        return resp.json()
+        return resp
+
+
+def _response_json(resp: httpx.Response) -> dict | None:
+    """Parse JSON body; return None for empty/HTML addon SPA fallbacks."""
+    raw = (resp.content or b"").strip()
+    if not raw or raw[:1] not in (b"{", b"["):
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+async def _get_json(path: str) -> dict:
+    resp = await _get_response(path)
+    data = _response_json(resp)
+    if data is None:
+        raise httpx.HTTPError(
+            f"AIOStreams returned non-JSON for {path} ({resp.headers.get('content-type', '')})"
+        )
+    return data
+
+
+async def try_get_json(path: str) -> dict | None:
+    """Like _get_json but returns None when the addon has no meta route for this id."""
+    try:
+        resp = await _get_response(path)
+    except httpx.HTTPError:
+        return None
+    return _response_json(resp)
 
 
 def _catalog_path(type_: str, catalog_id: str, extras: dict[str, str] | None = None) -> str:
@@ -77,9 +109,12 @@ def _meta_to_item(meta: dict) -> dict | None:
 
 
 async def fetch_manifest_catalogs() -> list[dict]:
+    from .anime_meta import sort_catalogs_for_display
+
     data = await _get_json("/manifest.json")
     catalogs = [_normalize_catalog_entry(c) for c in data.get("catalogs") or []]
-    return [c for c in catalogs if c.get("id")]
+    out = [c for c in catalogs if c.get("id")]
+    return sort_catalogs_for_display(out)
 
 
 async def fetch_catalog_items(

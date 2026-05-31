@@ -14,6 +14,7 @@ export type StreamTarget = {
 };
 
 export function streamTargetFromWatchlistItem(item: WatchlistItem): StreamTarget | null {
+  if (item.kind === "collection") return null;
   if (!item.tmdb_id) return null;
 
   if (item.kind === "episode") {

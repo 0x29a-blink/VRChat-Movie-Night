@@ -29,6 +29,12 @@ library/torrents/*
 MediaMTX/mediamtx.log
 MediaMTX/mediamtx.exe
 
+# AIOStreams self-hosted instance (clone + runtime data — do not commit)
+AIOStreams/repo/
+AIOStreams/.env
+AIOStreams/data/*
+!AIOStreams/data/.gitkeep
+
 # OS / editor
 .DS_Store
 Thumbs.db

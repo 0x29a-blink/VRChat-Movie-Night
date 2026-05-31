@@ -30,8 +30,18 @@ def host_from_request(request: Request) -> str:
     return ""
 
 
+def _setting_str(key: str) -> str:
+    raw = settings_store.get(key, "")
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    if s.lower() in ("none", "null"):
+        return ""
+    return s
+
+
 def resolve_hls_host(request: Request | None = None) -> str:
-    override = str(settings_store.get("hls_public_host", "") or "").strip()
+    override = _setting_str("hls_public_host")
     if override:
         return override
     if request is not None:
@@ -42,13 +52,13 @@ def resolve_hls_host(request: Request | None = None) -> str:
 
 
 def configured_hls_rel_path() -> str:
-    custom = str(settings_store.get("hls_stream_path", "") or "").strip().lstrip("/")
+    custom = _setting_str("hls_stream_path").lstrip("/")
     return custom or DEFAULT_HLS_REL_PATH
 
 
 def build_hls_url(request: Request | None = None, rel_path: str | None = None) -> str:
     host = resolve_hls_host(request)
-    path = (rel_path or configured_hls_rel_path()).lstrip("/")
+    path = (rel_path or configured_hls_rel_path() or DEFAULT_HLS_REL_PATH).lstrip("/")
     return f"http://{host}:{HLS_PORT}/{path}"
 
 
