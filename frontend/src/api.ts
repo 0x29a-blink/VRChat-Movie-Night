@@ -90,14 +90,43 @@ export const api = {
     if (episode) url += `&episode=${episode}`;
     return get<{ imdb_id: string; streams: import("./types").StreamResult[] }>(url);
   },
+  streamsStremio: (videoId: string, stremioId?: string, season?: number, episode?: number) => {
+    let url = `/api/streams/stremio?video_id=${encodeURIComponent(videoId)}`;
+    if (stremioId) url += `&stremio_id=${encodeURIComponent(stremioId)}`;
+    if (season != null) url += `&season=${season}`;
+    if (episode != null) url += `&episode=${episode}`;
+    return get<{ video_id: string; streams: import("./types").StreamResult[] }>(url);
+  },
 
   browseCatalogs: () =>
-    get<{ catalogs: import("./types").CatalogInfo[] }>("/api/browse/catalogs"),
-  browseItems: (type: string, id: string, skip = 0, search = "") => {
+    get<{
+      catalogs: import("./types").CatalogInfo[];
+      anime_catalog_key?: string | null;
+    }>("/api/browse/catalogs"),
+  browseItems: (
+    type: string,
+    id: string,
+    skip = 0,
+    search = "",
+    extras?: Record<string, string>
+  ) => {
     let url = `/api/browse/items?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}&skip=${skip}`;
     if (search) url += `&search=${encodeURIComponent(search)}`;
+    if (extras) {
+      for (const [k, v] of Object.entries(extras)) {
+        if (v !== "") url += `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
+      }
+    }
     return get<{ items: import("./types").BrowseItem[]; has_more: boolean }>(url);
   },
+  animeMeta: (stremioId: string) =>
+    get<{ title: import("./types").SearchResult; seasons: { season_number: number; name: string; episode_count: number }[] }>(
+      `/api/browse/anime/meta?stremio_id=${encodeURIComponent(stremioId)}`
+    ),
+  animeSeasonEpisodes: (stremioId: string, season: number) =>
+    get<{ episodes: import("./types").TmdbEpisode[] }>(
+      `/api/browse/anime/season/${season}/episodes?stremio_id=${encodeURIComponent(stremioId)}`
+    ),
   browseOpen: (stremioId: string, type: string) =>
     get<import("./types").BrowseOpenResult>(
       `/api/browse/open?stremio_id=${encodeURIComponent(stremioId)}&type=${encodeURIComponent(type)}`
@@ -117,13 +146,33 @@ export const api = {
 
   // library
   library: () => get<Record<string, import("./types").LibraryItem[]>>("/api/library"),
-  libraryMatch: (tmdbId: number, mediaType: "movie" | "series", season?: number, episode?: number) => {
-    const params = new URLSearchParams({
-      tmdb_id: String(tmdbId),
-      media_type: mediaType,
-    });
-    if (season != null) params.set("season", String(season));
-    if (episode != null) params.set("episode", String(episode));
+  libraryByPath: (path: string) =>
+    get<{ item: import("./types").LibraryItem | null }>(
+      `/api/library/by-path?path=${encodeURIComponent(path)}`
+    ),
+  libraryTracks: (id: number) => get<import("./types").LibraryTracksResponse>(`/api/library/${id}/tracks`),
+  setLibraryPlayback: (
+    id: number,
+    body: {
+      playback_audio_index?: number | null;
+      playback_subtitle_index?: number | null;
+      playback_burn_subtitles?: boolean;
+    }
+  ) => patch<import("./types").LibraryItem>(`/api/library/${id}/playback`, body),
+  applyLibraryPlayback: (id: number) =>
+    post<{ ok: boolean; playback_path: string }>(`/api/library/${id}/playback/apply`),
+  libraryMatch: (opts: {
+    mediaType: "movie" | "series";
+    tmdbId?: number;
+    stremioId?: string;
+    season?: number;
+    episode?: number;
+  }) => {
+    const params = new URLSearchParams({ media_type: opts.mediaType });
+    if (opts.tmdbId != null) params.set("tmdb_id", String(opts.tmdbId));
+    if (opts.stremioId) params.set("stremio_id", opts.stremioId);
+    if (opts.season != null) params.set("season", String(opts.season));
+    if (opts.episode != null) params.set("episode", String(opts.episode));
     return get<{ match: import("./types").LibraryItem | null }>(`/api/library/match?${params}`);
   },
   scanLibrary: () => post("/api/library/scan"),
@@ -179,6 +228,16 @@ export const api = {
   getSettings: () => get<import("./types").Settings>("/api/settings"),
   saveSettings: (values: Partial<import("./types").Settings>) =>
     put<import("./types").Settings>("/api/settings", values),
+  reloadAiostreamsConfig: () =>
+    post<{
+      ok: boolean;
+      discovered: string;
+      aiostreams_auto: boolean;
+      aiostreams_base: string;
+      aiostreams_base_effective: string;
+      aiostreams_base_discovered: string;
+    }>("/api/settings/aiostreams/reload"),
+  resetAiostreamsAuto: () => post<import("./types").Settings>("/api/settings/aiostreams/reset-auto"),
   testObs: () => post<{ connected: boolean; streaming: boolean; error?: string }>("/api/settings/test-obs"),
 
   // watchlist
@@ -199,6 +258,8 @@ export const api = {
   watchlistAddItem: (payload: {
     kind: string;
     tmdb_id?: number;
+    stremio_id?: string;
+    series_title?: string;
     media_type?: string;
     season?: number;
     episode?: number;
@@ -248,6 +309,33 @@ export const api = {
   watchlistDeleteWheelPreset: (id: number) => del(`/api/watchlist/wheel-presets/${id}`),
   watchlistAddEpisodes: (seriesId: number, episodes: { season: number; episode: number; title?: string; still?: string }[]) =>
     post<{ created: import("./types").WatchlistItem[] }>(`/api/watchlist/items/${seriesId}/episodes`, { episodes }),
+  watchlistSeasonCatalog: (seriesId: number) =>
+    get<{
+      seasons: {
+        season_number: number;
+        name: string;
+        episode_count: number;
+        on_watchlist: number;
+      }[];
+      stremio_id?: string | null;
+      tmdb_id?: number | null;
+      catalog_source?: "tmdb" | "anime" | "watchlist_only";
+    }>(`/api/watchlist/items/${seriesId}/season-catalog`),
+  watchlistAddSeasons: (seriesId: number, seasons: number[]) =>
+    post<{
+      added: number;
+      skipped_duplicates: number;
+      series: import("./types").WatchlistItem;
+    }>(`/api/watchlist/items/${seriesId}/add-seasons`, { seasons }),
+  watchlistLinkTmdbCatalog: (seriesId: number, tmdbId: number, updateDisplay = true) =>
+    post<{
+      series: import("./types").WatchlistItem;
+      catalog_source: string;
+    }>(`/api/watchlist/items/${seriesId}/link-tmdb-catalog`, {
+      tmdb_id: tmdbId,
+      media_type: "series",
+      update_display: updateDisplay,
+    }),
 
   watchlistQueueUnwatched: (groupId: number) =>
     post<{ added: number; skipped: number; eligible: number }>(`/api/watchlist/groups/${groupId}/queue-unwatched`),

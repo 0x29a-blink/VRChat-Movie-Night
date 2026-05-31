@@ -51,44 +51,30 @@ export function downloadLinkMetaFromSearch(
   return { tmdb_id: tmdbId, media_type: "movie" };
 }
 
-export function watchlistPayloadFromSearch(
-  selected: { tmdb_id: number; type: "movie" | "series"; title: string; poster: string; year: string; overview?: string },
+export function downloadLinkMetaFromAnime(
+  selected: {
+    stremio_id?: string;
+    title: string;
+    type: "movie" | "series";
+  },
   season?: number,
   episode?: number
-) {
+): DownloadLinkMeta | undefined {
+  const sid = (selected.stremio_id || "").trim();
+  if (!sid) return undefined;
   if (selected.type === "series" && season != null && episode != null) {
     return {
-      kind: "episode" as const,
-      tmdb_id: selected.tmdb_id,
+      stremio_id: sid,
+      series_title: selected.title,
       media_type: "series",
       season,
       episode,
-      title: selected.title,
-      poster: selected.poster,
-      year: selected.year,
-      overview: selected.overview,
     };
   }
   if (selected.type === "series") {
-    return {
-      kind: "series" as const,
-      tmdb_id: selected.tmdb_id,
-      media_type: "series",
-      title: selected.title,
-      poster: selected.poster,
-      year: selected.year,
-      overview: selected.overview,
-    };
+    return { stremio_id: sid, series_title: selected.title, media_type: "series" };
   }
-  return {
-    kind: "movie" as const,
-    tmdb_id: selected.tmdb_id,
-    media_type: "movie",
-    title: selected.title,
-    poster: selected.poster,
-    year: selected.year,
-    overview: selected.overview,
-  };
+  return { stremio_id: sid, series_title: selected.title, media_type: "movie" };
 }
 
 export function watchlistPayloadFromTarget(

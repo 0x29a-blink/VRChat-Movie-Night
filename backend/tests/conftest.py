@@ -3,7 +3,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.db import Base
+from app.db import Base, _migrate_schema
+from app import db as db_module
 from app import models  # noqa: F401
 
 
@@ -15,7 +16,10 @@ def db():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db_module.engine = engine
+    db_module.SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    _migrate_schema()
+    Session = db_module.SessionLocal
     session = Session()
     try:
         yield session

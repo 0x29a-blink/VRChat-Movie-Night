@@ -5,6 +5,7 @@ from pathlib import Path
 from .. import settings_store
 from ..db import SessionLocal
 from ..models import LibraryItem, QueueItem
+from ..library.playback import build_playback_file
 from ..obs.controller import aio, controller
 from ..ws import hub
 
@@ -128,7 +129,14 @@ class QueueManager:
             if idx < 0 or idx >= len(items):
                 raise ValueError("Index out of range")
             target = items[idx]
-            path = target.library_path
+            lib = s.query(LibraryItem).filter(LibraryItem.path == target.library_path).first()
+            if lib:
+                try:
+                    path = await asyncio.to_thread(build_playback_file, lib)
+                except Exception as exc:
+                    raise ValueError(f"Could not prepare playback: {exc}") from exc
+            else:
+                path = target.library_path
         self._set_current_index(idx)
         # Note: we intentionally do NOT auto-start the OBS stream here. The
         # continuous stream is controlled by the explicit "Go live" button so

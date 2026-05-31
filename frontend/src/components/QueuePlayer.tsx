@@ -15,6 +15,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   GripVertical,
+  Languages,
   Pause,
   Play,
   Radio,
@@ -35,6 +36,7 @@ import { api } from "../api";
 import { copyHlsUrl } from "../hlsUrl";
 import { fmtMs } from "../format";
 import type { PlayerState, QueueItem, QueueSnapshot } from "../types";
+import { PlaybackTracksPanel } from "./PlaybackTracksPanel";
 import { useToast } from "./Toast";
 
 interface Props {
@@ -279,6 +281,14 @@ export function QueuePlayer({ queue, player, obs, onObs }: Props) {
             Loop queue
           </label>
         </div>
+
+        {cur?.library_path && (
+          <PlaybackTracksPanel
+            libraryPath={cur.library_path}
+            isNowPlaying
+            disabled={!obs.connected}
+          />
+        )}
       </div>
 
       {/* Queue list */}
@@ -308,6 +318,7 @@ export function QueuePlayer({ queue, player, obs, onObs }: Props) {
                     item={item}
                     index={idx}
                     isCurrent={idx === queue.current_index}
+                    obsConnected={obs.connected}
                     onPlay={act("Play", () => api.play(idx))}
                     onRemove={act("Remove from queue", () => api.queueRemove(item.id))}
                   />
@@ -345,58 +356,86 @@ function Row({
   item,
   index,
   isCurrent,
+  obsConnected,
   onPlay,
   onRemove,
 }: {
   item: QueueItem;
   index: number;
   isCurrent: boolean;
+  obsConnected: boolean;
   onPlay: () => void;
   onRemove: () => void;
 }) {
+  const [tracksOpen, setTracksOpen] = useState(false);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id,
   });
+  const canEditTracks = !!item.library_path?.trim();
 
   return (
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={`card flex items-center gap-3 p-2.5 ${isDragging ? "opacity-60" : ""} ${
+      className={`card overflow-hidden ${isDragging ? "opacity-60" : ""} ${
         isCurrent ? "ring-1 ring-brand-500/60" : ""
       }`}
     >
-      <button
-        {...attributes}
-        {...listeners}
-        className="cursor-grab touch-none rounded-lg p-1 text-slate-500 hover:text-slate-300"
-      >
-        <GripVertical className="h-4 w-4" />
-      </button>
-      <span className="w-5 text-center text-xs text-slate-500">{index + 1}</span>
-      <div className="h-10 w-16 shrink-0 overflow-hidden rounded-md bg-ink-800">
-        {item.thumbnail && <img src={item.thumbnail} alt="" className="h-full w-full object-cover" />}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm" title={item.title}>
-          {item.title}
+      <div className="flex items-center gap-3 p-2.5">
+        <button
+          {...attributes}
+          {...listeners}
+          className="cursor-grab touch-none rounded-lg p-1 text-slate-500 hover:text-slate-300"
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
+        <span className="w-5 text-center text-xs text-slate-500">{index + 1}</span>
+        <div className="h-10 w-16 shrink-0 overflow-hidden rounded-md bg-ink-800">
+          {item.thumbnail && <img src={item.thumbnail} alt="" className="h-full w-full object-cover" />}
         </div>
-        {isCurrent && <div className="text-[11px] text-brand-300">Playing</div>}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm" title={item.title}>
+            {item.title}
+          </div>
+          {isCurrent && <div className="text-[11px] text-brand-300">Playing</div>}
+        </div>
+        {canEditTracks && (
+          <button
+            type="button"
+            onClick={() => setTracksOpen((o) => !o)}
+            className={`rounded-lg p-2 hover:bg-white/10 ${
+              tracksOpen ? "text-brand-300" : "text-slate-400 hover:text-brand-300"
+            }`}
+            title={tracksOpen ? "Hide audio & subtitles" : "Audio & subtitles (before play)"}
+          >
+            <Languages className="h-4 w-4" />
+          </button>
+        )}
+        <button
+          onClick={onPlay}
+          className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-brand-300"
+          title="Play this"
+        >
+          <Play className="h-4 w-4" />
+        </button>
+        <button
+          onClick={onRemove}
+          className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-red-300"
+          title="Remove"
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
-      <button
-        onClick={onPlay}
-        className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-brand-300"
-        title="Play this"
-      >
-        <Play className="h-4 w-4" />
-      </button>
-      <button
-        onClick={onRemove}
-        className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-red-300"
-        title="Remove"
-      >
-        <X className="h-4 w-4" />
-      </button>
+      {tracksOpen && canEditTracks && (
+        <div className="border-t border-white/5 px-2.5 pb-2.5">
+          <PlaybackTracksPanel
+            libraryPath={item.library_path}
+            isNowPlaying={isCurrent}
+            disabled={isCurrent && !obsConnected}
+            compact
+          />
+        </div>
+      )}
     </div>
   );
 }

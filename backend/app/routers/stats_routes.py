@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 from .. import auth
 from ..db import get_db
 from ..models import User, UserRating, UserWatchStatus, WatchlistComment, WatchlistItem, WatchlistGroup
-from .watchlist_routes import _children_by_parent, _item_base, _user_root_watched, _user_watched_item
+from .watchlist_routes import (
+    _container_children_maps,
+    _item_base,
+    _series_children,
+    _user_root_watched,
+    _user_watched_item,
+)
 
 router = APIRouter(prefix="/api/stats", tags=["stats"], dependencies=[Depends(auth.require_auth)])
 
@@ -27,6 +33,11 @@ def _user_completion_at(
     item_ids = [item.id]
     if item.kind == "series":
         item_ids.extend(c.id for c in children)
+    elif item.kind == "collection":
+        for c in children:
+            item_ids.append(c.id)
+            if c.kind == "series":
+                item_ids.extend(e.id for e in _series_children(db, c.id))
 
     rows = (
         db.query(UserWatchStatus)
@@ -81,7 +92,7 @@ def _build_title_stats(
     )
 
     group_episode_progress = None
-    if item.kind == "series" and children:
+    if item.kind in ("series", "collection") and children:
         ep_any = sum(
             1 for c in children if any(_user_watched_item(db, u.id, c.id) for u in all_users)
         )
@@ -128,12 +139,11 @@ def get_stats(
             q = q.filter(WatchlistItem.group_id == group_id)
             group_name = grp.name
     roots = q.order_by(WatchlistItem.sort_order, WatchlistItem.id).all()
-    series_ids = [i.id for i in roots if i.kind == "series"]
-    by_parent = _children_by_parent(db, series_ids)
+    by_parent, nested = _container_children_maps(db, roots)
 
     titles: list[dict] = []
     for root in roots:
-        children = by_parent.get(root.id, []) if root.kind == "series" else []
+        children = by_parent.get(root.id, []) if root.kind in ("series", "collection") else []
         titles.append(_build_title_stats(db, root, all_users, children))
 
     watched_titles = [t for t in titles if t["watched_count"] > 0]
@@ -151,7 +161,8 @@ def get_stats(
                 db,
                 u.id,
                 root,
-                by_parent.get(root.id, []) if root.kind == "series" else [],
+                by_parent.get(root.id, []) if root.kind in ("series", "collection") else [],
+                nested if root.kind == "collection" else None,
             )
         )
         given_values: list[float] = []

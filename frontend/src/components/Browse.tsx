@@ -7,8 +7,10 @@ import type { BrowseItem, CatalogInfo, SearchResult, TmdbCollectionSummary } fro
 import { streamOpenFromBrowseItem, streamOpenFromSearchResult, type StreamOpenParams } from "../streamOpenUrl";
 
 type CollectionView = {
+  collection_id: number;
   name: string;
   overview: string;
+  poster: string;
   movies: SearchResult[];
 };
 
@@ -35,8 +37,40 @@ function watchlistFromSearchResult(m: SearchResult): WatchlistAddPayload {
   };
 }
 
+function watchlistFromCollection(c: {
+  collection_id: number;
+  name: string;
+  overview?: string;
+  poster?: string;
+}): WatchlistAddPayload {
+  return {
+    kind: "collection",
+    tmdb_id: c.collection_id,
+    media_type: "collection",
+    title: c.name,
+    poster: c.poster || "",
+    overview: c.overview || "",
+  };
+}
+
 function watchlistFromBrowseItem(item: BrowseItem): WatchlistAddPayload | null {
-  if (item.kind === "collection") return null;
+  if (item.kind === "collection") {
+    const sid = (item.stremio_id || "").trim();
+    let collectionId: number | undefined;
+    if (sid.startsWith("tmdb:")) {
+      const n = Number(sid.split(":", 2)[1]);
+      if (Number.isFinite(n)) collectionId = n;
+    } else if (/^\d+$/.test(sid)) {
+      collectionId = Number(sid);
+    }
+    if (!collectionId) return null;
+    return watchlistFromCollection({
+      collection_id: collectionId,
+      name: item.title,
+      overview: item.overview,
+      poster: item.poster,
+    });
+  }
   const sid = (item.stremio_id || "").trim();
   let tmdbId: number | undefined;
   if (sid.startsWith("tmdb:")) {
@@ -60,6 +94,59 @@ function watchlistFromBrowseItem(item: BrowseItem): WatchlistAddPayload | null {
 
 function catalogKey(c: CatalogInfo) {
   return `${c.type}:${c.id}`;
+}
+
+function defaultCatalogExtras(cat: CatalogInfo | null): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!cat) return out;
+  for (const extra of cat.extras) {
+    if (extra.options?.length) out[extra.name] = extra.options[0];
+  }
+  return out;
+}
+
+function CatalogExtrasPanel({
+  catalog,
+  values,
+  onChange,
+  onApply,
+  loading,
+}: {
+  catalog: CatalogInfo;
+  values: Record<string, string>;
+  onChange: (name: string, value: string) => void;
+  onApply: () => void;
+  loading: boolean;
+}) {
+  if (!catalog.extras.length) return null;
+  return (
+    <div className="card space-y-3 p-4">
+      <div className="text-xs font-medium text-slate-300">Catalog options</div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {catalog.extras.map((extra) => (
+          <label key={extra.name} className="block text-xs text-slate-400">
+            {extra.name}
+            {extra.required ? " *" : ""}
+            <select
+              className="input mt-1"
+              value={values[extra.name] ?? ""}
+              onChange={(e) => onChange(extra.name, e.target.value)}
+            >
+              {!extra.required && <option value="">—</option>}
+              {extra.options.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          </label>
+        ))}
+      </div>
+      <button type="button" onClick={onApply} disabled={loading} className="btn-primary text-xs">
+        Apply filters
+      </button>
+    </div>
+  );
 }
 
 function CatalogPicker({
@@ -154,6 +241,9 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
   const [loadingCatalogs, setLoadingCatalogs] = useState(false);
   const [selectedCatalogKey, setSelectedCatalogKey] = useState("");
   const [catalogFilter, setCatalogFilter] = useState("");
+  const [catalogSearch, setCatalogSearch] = useState("");
+  const [catalogExtras, setCatalogExtras] = useState<Record<string, string>>({});
+  const [animeCatalogKey, setAnimeCatalogKey] = useState<string | null>(null);
   const [items, setItems] = useState<BrowseItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -180,8 +270,10 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
     try {
       const res = await api.browseCollection(id);
       setActiveCollection({
+        collection_id: id,
         name: res.name,
         overview: res.overview,
+        poster: res.poster || "",
         movies: res.movies,
       });
       setCollections([]);
@@ -198,8 +290,12 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
     try {
       const res = await api.browseCatalogs();
       setCatalogs(res.catalogs);
-      setSelectedCatalogKey(res.catalogs[0] ? catalogKey(res.catalogs[0]) : "");
+      const key = res.anime_catalog_key || (res.catalogs[0] ? catalogKey(res.catalogs[0]) : "");
+      setAnimeCatalogKey(res.anime_catalog_key ?? null);
+      setSelectedCatalogKey(key);
       setCatalogFilter("");
+      setCatalogSearch("");
+      setCatalogExtras(defaultCatalogExtras(res.catalogs.find((c) => catalogKey(c) === key) ?? null));
       setItems([]);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load catalogs");
@@ -215,14 +311,20 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
   }, [catalogs, selectedCatalogKey]);
 
   const loadCatalogItems = useCallback(
-    async (append: boolean) => {
+    async (
+      append: boolean,
+      searchOverride?: string,
+      extrasOverride?: Record<string, string>
+    ) => {
       const cat = selectedCatalog;
       if (!cat) return;
       setLoadingItems(true);
       setError("");
       try {
         const skip = append ? items.length : 0;
-        const res = await api.browseItems(cat.type, cat.id, skip);
+        const q = searchOverride !== undefined ? searchOverride : catalogSearch;
+        const extras = extrasOverride ?? catalogExtras;
+        const res = await api.browseItems(cat.type, cat.id, skip, q, extras);
         setItems((prev) => (append ? [...prev, ...res.items] : res.items));
         setHasMore(res.has_more);
       } catch (err: unknown) {
@@ -231,19 +333,42 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
         setLoadingItems(false);
       }
     },
-    [selectedCatalog, items.length]
+    [selectedCatalog, items.length, catalogSearch, catalogExtras]
   );
+
+  const openAnimeBrowse = () => {
+    setSource("aiostreams");
+    setCatalogFilter("anime");
+    if (animeCatalogKey) setSelectedCatalogKey(animeCatalogKey);
+  };
 
   useEffect(() => {
     if (source === "aiostreams") loadCatalogs();
   }, [source, loadCatalogs]);
 
   useEffect(() => {
-    if (source === "aiostreams" && catalogs.length > 0) {
+    if (source !== "aiostreams" || !selectedCatalog) return;
+    const extras = defaultCatalogExtras(selectedCatalog);
+    setCatalogExtras(extras);
+    setCatalogSearch("");
+    setItems([]);
+    loadCatalogItems(false, "", extras);
+  }, [selectedCatalogKey, catalogs.length, source]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (catalogFilter === "anime" && animeCatalogKey) {
+      setSelectedCatalogKey(animeCatalogKey);
+    }
+  }, [animeCatalogKey, catalogFilter]);
+
+  useEffect(() => {
+    if (source !== "aiostreams" || !selectedCatalog) return;
+    const t = setTimeout(() => {
       setItems([]);
       loadCatalogItems(false);
-    }
-  }, [selectedCatalogKey, catalogs.length, source]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, 350);
+    return () => clearTimeout(t);
+  }, [catalogSearch]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pickBrowseItem = async (item: BrowseItem) => {
     setResolving(true);
@@ -252,8 +377,10 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
       const res = await api.browseOpen(item.stremio_id, item.type);
       if (res.action === "collection") {
         setActiveAioCollection({
+          collection_id: res.collection_id,
           name: res.name || item.title,
           overview: res.overview || item.overview,
+          poster: res.poster || item.poster || "",
           movies: res.movies,
         });
         setItems([]);
@@ -380,6 +507,14 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
           <Sparkles className="mr-1.5 inline h-4 w-4" />
           AIOStreams catalogs
         </button>
+        <button
+          type="button"
+          onClick={openAnimeBrowse}
+          className="btn-ghost border border-violet-500/30 text-violet-200"
+          title="Open anime / Kitsu / MAL catalogs from your manifest"
+        >
+          Anime
+        </button>
       </div>
 
       {error && <div className="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</div>}
@@ -446,6 +581,9 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
                       <div className="min-w-0 flex-1">
                         <div className="font-medium">{c.name}</div>
                         <p className="mt-1 line-clamp-2 text-xs text-slate-500">{c.overview}</p>
+                        <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                          <AddToWatchlistButton payload={watchlistFromCollection(c)} label="Add collection" />
+                        </div>
                       </div>
                     </button>
                   ))}
@@ -463,13 +601,19 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
               >
                 ← Back to collections
               </button>
-              <h3 className="text-lg font-semibold">{activeCollection.name}</h3>
-              {activeCollection.overview && (
-                <p className="mt-1 max-w-2xl text-sm text-slate-400">{activeCollection.overview}</p>
-              )}
-              <p className="mb-3 mt-2 text-xs text-slate-500">
-                {activeCollection.movies.length} movies · Streams opens here; ↗ or middle/Ctrl+click opens a new tab
-              </p>
+              <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold">{activeCollection.name}</h3>
+                  {activeCollection.overview && (
+                    <p className="mt-1 max-w-2xl text-sm text-slate-400">{activeCollection.overview}</p>
+                  )}
+                  <p className="mt-2 text-xs text-slate-500">
+                    {activeCollection.movies.length} movies · Streams opens here; ↗ or middle/Ctrl+click opens a new
+                    tab
+                  </p>
+                </div>
+                <AddToWatchlistButton payload={watchlistFromCollection(activeCollection)} label="Add collection" />
+              </div>
               <TitleGrid
                 rows={activeCollection.movies.map((m) => ({
                   key: `m-${m.tmdb_id}`,
@@ -523,13 +667,22 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
               >
                 ← Back to catalog
               </button>
-              <h3 className="text-lg font-semibold">{activeAioCollection.name}</h3>
-              {activeAioCollection.overview && (
-                <p className="mt-1 max-w-2xl text-sm text-slate-400">{activeAioCollection.overview}</p>
-              )}
-              <p className="mb-3 mt-2 text-xs text-slate-500">
-                {activeAioCollection.movies.length} movies · Streams opens here; ↗ or middle/Ctrl+click opens a new tab
-              </p>
+              <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold">{activeAioCollection.name}</h3>
+                  {activeAioCollection.overview && (
+                    <p className="mt-1 max-w-2xl text-sm text-slate-400">{activeAioCollection.overview}</p>
+                  )}
+                  <p className="mt-2 text-xs text-slate-500">
+                    {activeAioCollection.movies.length} movies · Streams opens here; ↗ or middle/Ctrl+click opens a
+                    new tab
+                  </p>
+                </div>
+                <AddToWatchlistButton
+                  payload={watchlistFromCollection(activeAioCollection)}
+                  label="Add collection"
+                />
+              </div>
               <TitleGrid
                 rows={activeAioCollection.movies.map((m) => ({
                   key: `m-${m.tmdb_id}`,
@@ -554,9 +707,46 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
                 filter={catalogFilter}
                 onFilterChange={setCatalogFilter}
               />
+              {selectedCatalog && (
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                  <label className="block flex-1 text-xs text-slate-400">
+                    Search this catalog
+                    <div className="relative mt-1">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+                      <input
+                        type="search"
+                        value={catalogSearch}
+                        onChange={(e) => setCatalogSearch(e.target.value)}
+                        placeholder="Title search (AIOStreams catalog extra)…"
+                        className="input py-2 pl-9 text-sm"
+                      />
+                    </div>
+                  </label>
+                </div>
+              )}
+              {selectedCatalog && (
+                <CatalogExtrasPanel
+                  catalog={selectedCatalog}
+                  values={catalogExtras}
+                  onChange={(name, value) => setCatalogExtras((prev) => ({ ...prev, [name]: value }))}
+                  onApply={() => {
+                    setItems([]);
+                    loadCatalogItems(false);
+                  }}
+                  loading={loadingItems}
+                />
+              )}
               {loadingItems && items.length === 0 ? (
                 <div className="flex items-center gap-2 py-6 text-sm text-slate-400">
                   <Loader2 className="h-4 w-4 animate-spin" /> Loading titles…
+                </div>
+              ) : items.length === 0 ? (
+                <div className="rounded-xl border border-white/5 bg-black/20 px-4 py-8 text-center text-sm text-slate-400">
+                  <p className="font-medium text-slate-300">No titles in this catalog</p>
+                  <p className="mt-2 text-xs">
+                    Some AIOStreams catalogs (e.g. Popular AniDB) return empty lists from the addon — try
+                    AniList or MyAnimeList catalogs instead.
+                  </p>
                 </div>
               ) : (
                 <>
@@ -571,7 +761,7 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
                         year: item.year,
                         poster: item.poster,
                         rating: item.rating,
-                        badge: isCollection ? "Collection" : undefined,
+                        badge: isCollection ? "Collection" : item.kind === "anime" ? "Anime" : undefined,
                         openParams: openParams ?? undefined,
                         watchlist: watchlist ?? undefined,
                         onOpen: () => pickBrowseItem(item),

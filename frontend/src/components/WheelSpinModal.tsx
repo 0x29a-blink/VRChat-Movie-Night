@@ -684,6 +684,11 @@ export function WheelSpinModal({
                     className="mx-auto mt-3 h-36 max-w-full rounded-lg object-cover shadow-glow"
                   />
                 )}
+                {winner?.kind === "collection" && (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Expand the collection on your watchlist to pick which movie to stream.
+                  </p>
+                )}
                 {winnerStreamTarget && onFindStreams && (
                   <div className="mt-4 flex justify-center">
                     <TitleMediaActions

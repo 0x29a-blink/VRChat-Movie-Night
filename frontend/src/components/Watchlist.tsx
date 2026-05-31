@@ -17,6 +17,7 @@ import {
   ChevronDown,
   ChevronRight,
   GripVertical,
+  Link2,
   ListPlus,
   Loader2,
   MessageSquare,
@@ -36,6 +37,7 @@ import { TitleMediaActions } from "./TitleMediaActions";
 import { TitleStreamsModal } from "./TitleStreamsModal";
 import { WheelSpinModal } from "./WheelSpinModal";
 import { usePlayback } from "./PlaybackContext";
+import { LinkWatchlistTmdbModal } from "./LinkWatchlistTmdbModal";
 import { useToast } from "./Toast";
 
 function DeleteConfirmModal({
@@ -341,6 +343,13 @@ function ItemOverview({ item, expanded = true }: { item: WatchlistItem; expanded
   return <p className="mt-1 line-clamp-4 text-xs leading-relaxed text-slate-400">{overview}</p>;
 }
 
+type SeasonCatalogRow = {
+  season_number: number;
+  name: string;
+  episode_count: number;
+  on_watchlist: number;
+};
+
 function SeriesExpandedPanel({
   item,
   currentUserId,
@@ -348,6 +357,7 @@ function SeriesExpandedPanel({
   onParentRefresh,
   onRequestDelete,
   onFindStreams,
+  onToast,
 }: {
   item: WatchlistItem;
   currentUserId: number;
@@ -355,33 +365,50 @@ function SeriesExpandedPanel({
   onParentRefresh: () => void;
   onRequestDelete: (item: WatchlistItem) => void;
   onFindStreams: (target: StreamTarget) => void;
+  onToast: (msg: string, kind?: "success" | "error" | "info") => void;
 }) {
   const children = item.children ?? [];
-  const seasons = useMemo(() => {
-    const counts = new Map<number, number>();
-    for (const c of children) {
-      if (c.season != null) counts.set(c.season, (counts.get(c.season) ?? 0) + 1);
-    }
-    return [...counts.entries()]
-      .sort(([a], [b]) => a - b)
-      .map(([season_number, episode_count]) => ({
-        season_number,
-        episode_count,
-        name: `Season ${season_number}`,
-      }));
-  }, [children]);
-
+  const [catalog, setCatalog] = useState<SeasonCatalogRow[]>([]);
+  const [catalogSource, setCatalogSource] = useState<"tmdb" | "anime" | "watchlist_only">("watchlist_only");
+  const [catalogTmdbId, setCatalogTmdbId] = useState<number | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState("");
+  const [linkTmdbOpen, setLinkTmdbOpen] = useState(false);
   const [season, setSeason] = useState<number | null>(null);
+  const [selectedSeasons, setSelectedSeasons] = useState<Set<number>>(new Set());
   const [tmdbEps, setTmdbEps] = useState<Map<number, TmdbEpisode>>(new Map());
   const [loadingEps, setLoadingEps] = useState(false);
+  const [adding, setAdding] = useState(false);
+
+  const loadCatalog = useCallback(() => {
+    setCatalogLoading(true);
+    setCatalogError("");
+    api
+      .watchlistSeasonCatalog(item.id)
+      .then((r) => {
+        setCatalog(r.seasons || []);
+        setCatalogSource(r.catalog_source || "watchlist_only");
+        setCatalogTmdbId(r.tmdb_id ?? null);
+        if (r.seasons?.length) {
+          setSeason((prev) =>
+            prev != null && r.seasons.some((s) => s.season_number === prev)
+              ? prev
+              : r.seasons[0].season_number
+          );
+        } else {
+          setSeason(null);
+        }
+      })
+      .catch((err: unknown) => {
+        setCatalog([]);
+        setCatalogError(err instanceof Error ? err.message : "Could not load seasons");
+      })
+      .finally(() => setCatalogLoading(false));
+  }, [item.id]);
 
   useEffect(() => {
-    if (seasons.length === 0) {
-      setSeason(null);
-      return;
-    }
-    setSeason((prev) => (prev != null && seasons.some((s) => s.season_number === prev) ? prev : seasons[0].season_number));
-  }, [seasons, item.id]);
+    loadCatalog();
+  }, [loadCatalog]);
 
   useEffect(() => {
     if (!item.tmdb_id || season == null) {
@@ -408,37 +435,163 @@ function SeriesExpandedPanel({
     [children, season]
   );
 
+  const seasonRow = catalog.find((s) => s.season_number === season);
+  const missingInSeason =
+    seasonRow != null ? Math.max(0, seasonRow.episode_count - seasonRow.on_watchlist) : 0;
+
+  const addSeasons = async (seasonNums: number[]) => {
+    if (!seasonNums.length) return;
+    setAdding(true);
+    try {
+      const res = await api.watchlistAddSeasons(item.id, seasonNums);
+      onUpdate(res.series);
+      onParentRefresh();
+      onToast(
+        res.added > 0
+          ? `Added ${res.added} episode${res.added === 1 ? "" : "s"} to watchlist`
+          : "All episodes in those seasons were already on the list",
+        "success"
+      );
+      loadCatalog();
+      setSelectedSeasons(new Set());
+    } catch (err: unknown) {
+      onToast(err instanceof Error ? err.message : "Could not add episodes", "error");
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const toggleSeasonPick = (sn: number) => {
+    setSelectedSeasons((prev) => {
+      const next = new Set(prev);
+      if (next.has(sn)) next.delete(sn);
+      else next.add(sn);
+      return next;
+    });
+  };
+
   return (
     <div className="ml-10 mt-3 space-y-3 border-l border-white/5 pl-3" onPointerDown={stopDrag}>
       <ItemOverview item={item} />
 
+      {catalogLoading ? (
+        <div className="flex items-center gap-2 text-xs text-slate-400">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading seasons…
+        </div>
+      ) : catalogError ? (
+        <p className="text-xs text-amber-300">{catalogError}</p>
+      ) : catalog.length === 0 ? (
+        <p className="text-xs text-slate-500">
+          No season list for this show (link TMDB or use a kitsu/mal/anilist id). Add episodes from Search.
+        </p>
+      ) : (
+        <div className="space-y-3 rounded-lg border border-white/5 bg-black/20 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-medium text-slate-300">Add episodes to watchlist</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="chip bg-white/5 text-slate-400">
+                Seasons from {catalogSource === "tmdb" ? "TMDB" : catalogSource === "anime" ? "anime meta" : "list only"}
+              </span>
+              <button
+                type="button"
+                className="btn-ghost py-0.5 text-[10px]"
+                onClick={() => setLinkTmdbOpen(true)}
+              >
+                <Link2 className="h-3 w-3" /> Link TMDB catalog
+              </button>
+            </div>
+          </div>
+          {catalogSource === "anime" && (
+            <p className="text-[10px] text-slate-500">
+              Anime meta may only list one season. Link TMDB to bulk-add all seasons and episodes.
+              {catalogTmdbId ? ` (TMDB #${catalogTmdbId} also set — refresh if seasons look wrong.)` : ""}
+            </p>
+          )}
+
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="block min-w-[10rem] flex-1 text-xs text-slate-400">
+              Season
+              <select
+                className="input mt-1 w-full"
+                value={season ?? ""}
+                onChange={(e) => setSeason(Number(e.target.value) || null)}
+              >
+                {catalog.map((s) => (
+                  <option key={s.season_number} value={s.season_number}>
+                    {s.name} · {s.episode_count} eps
+                    {s.on_watchlist > 0 ? ` (${s.on_watchlist} on list)` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={adding || season == null || missingInSeason === 0}
+              onClick={() => season != null && addSeasons([season])}
+              className="btn-primary shrink-0 text-xs"
+            >
+              {adding ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <>
+                  <ListPlus className="h-3.5 w-3.5" /> Add season
+                </>
+              )}
+            </button>
+          </div>
+          {seasonRow && missingInSeason === 0 && seasonRow.episode_count > 0 && (
+            <p className="text-[10px] text-slate-500">Every episode in this season is already on your watchlist.</p>
+          )}
+          {seasonRow && missingInSeason > 0 && (
+            <p className="text-[10px] text-slate-500">
+              Adds {missingInSeason} missing episode{missingInSeason === 1 ? "" : "s"} from this season.
+            </p>
+          )}
+
+          {catalog.length > 1 && (
+            <div className="space-y-2 border-t border-white/5 pt-2">
+              <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                Or add multiple seasons
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {catalog.map((s) => (
+                  <label
+                    key={s.season_number}
+                    className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300 hover:bg-white/5"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedSeasons.has(s.season_number)}
+                      onChange={() => toggleSeasonPick(s.season_number)}
+                      className="h-3.5 w-3.5 rounded accent-brand-500"
+                    />
+                    {s.name}
+                    <span className="text-slate-500">({s.episode_count})</span>
+                  </label>
+                ))}
+              </div>
+              <button
+                type="button"
+                disabled={adding || selectedSeasons.size === 0}
+                onClick={() => addSeasons([...selectedSeasons])}
+                className="btn-ghost border border-white/10 text-xs"
+              >
+                <ListPlus className="h-3.5 w-3.5" /> Add {selectedSeasons.size} selected season
+                {selectedSeasons.size === 1 ? "" : "s"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {children.length === 0 ? (
-        <p className="px-2 py-1 text-xs text-slate-500">No episodes on the watchlist yet.</p>
+        <p className="px-2 py-1 text-xs text-slate-500">No episodes on the watchlist yet — use Add season above.</p>
       ) : (
         <>
-          <label className="block text-xs text-slate-400">
-            Season
-            <select
-              className="input mt-1 w-full max-w-xs"
-              value={season ?? ""}
-              onChange={(e) => setSeason(Number(e.target.value) || null)}
-            >
-              {seasons.map((s) => (
-                <option key={s.season_number} value={s.season_number}>
-                  {s.name} ({s.episode_count} eps)
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {loadingEps && (
+          {loadingEps && item.tmdb_id && (
             <div className="flex items-center gap-2 text-xs text-slate-400">
               <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading episode details…
             </div>
-          )}
-
-          {!loadingEps && epsInSeason.length === 0 && (
-            <p className="text-xs text-slate-500">No episodes tracked for this season.</p>
           )}
 
           <div className="grid gap-2 sm:grid-cols-2">
@@ -455,7 +608,198 @@ function SeriesExpandedPanel({
               />
             ))}
           </div>
+          {season != null && epsInSeason.length === 0 && (
+            <p className="text-xs text-slate-500">No episodes from this season on the list yet.</p>
+          )}
         </>
+      )}
+
+      {linkTmdbOpen && (
+        <LinkWatchlistTmdbModal
+          item={item}
+          onClose={() => setLinkTmdbOpen(false)}
+          onLinked={(updated) => {
+            onUpdate(updated);
+            onParentRefresh();
+            loadCatalog();
+            onToast("TMDB catalog linked — season list updated", "success");
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CollectionMemberRow({
+  item,
+  currentUserId,
+  onUpdate,
+  onParentRefresh,
+  onRequestDelete,
+  onFindStreams,
+}: {
+  item: WatchlistItem;
+  currentUserId: number;
+  onUpdate: (item: WatchlistItem) => void;
+  onParentRefresh: () => void;
+  onRequestDelete: (item: WatchlistItem) => void;
+  onFindStreams: (target: StreamTarget) => void;
+}) {
+  const toggleWatched = async () => {
+    const next = await api.watchlistSetWatched(item.id, !item.my_watched);
+    onUpdate(next);
+    onParentRefresh();
+  };
+
+  const setRating = async (stars: number) => {
+    const next = await api.watchlistSetRating(item.id, stars);
+    onUpdate(next);
+  };
+
+  const streamTarget = streamTargetFromWatchlistItem(item);
+
+  return (
+    <div className="card flex gap-3 p-2">
+      {item.poster ? (
+        <img src={item.poster} alt="" className="h-14 w-10 shrink-0 rounded object-cover" />
+      ) : (
+        <div className="h-14 w-10 shrink-0 rounded bg-ink-800" />
+      )}
+      <div className="min-w-0 flex-1 space-y-1.5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-xs font-medium">
+              {item.title}
+              {item.year && <span className="text-slate-500"> ({item.year})</span>}
+            </div>
+            <span className="chip mt-0.5 bg-white/5 text-slate-400">{item.kind}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onRequestDelete(item)}
+            onPointerDown={stopDrag}
+            className="shrink-0 text-red-400"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
+        <UserWatchBadges
+          users={item.user_watch ?? []}
+          currentUserId={currentUserId}
+          onToggleSelf={toggleWatched}
+          compact
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          <StarPicker value={item.my_rating} onChange={setRating} ratings={item.ratings ?? []} />
+          <TitleMediaActions
+            compact
+            onFindStreams={streamTarget ? () => onFindStreams(streamTarget) : undefined}
+            libraryMatch={item.library_match}
+            onPointerDown={stopDrag}
+          />
+          <ItemComments itemId={item.id} commentCount={item.comment_count} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CollectionExpandedPanel({
+  item,
+  currentUserId,
+  onUpdate,
+  onParentRefresh,
+  onRequestDelete,
+  onFindStreams,
+  onToast,
+}: {
+  item: WatchlistItem;
+  currentUserId: number;
+  onUpdate: (item: WatchlistItem) => void;
+  onParentRefresh: () => void;
+  onRequestDelete: (item: WatchlistItem) => void;
+  onFindStreams: (target: StreamTarget) => void;
+  onToast: (msg: string, kind?: "success" | "error" | "info") => void;
+}) {
+  const children = item.children ?? [];
+  const [expandedSeries, setExpandedSeries] = useState<Set<number>>(new Set());
+
+  const toggleSeries = (id: number) => {
+    setExpandedSeries((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  return (
+    <div className="ml-6 mt-2 space-y-2 border-l border-white/10 pl-3">
+      {children.length === 0 && (
+        <p className="text-xs text-slate-500">No titles in this collection yet.</p>
+      )}
+      {children.map((child) =>
+        child.kind === "series" ? (
+          <div key={child.id} className="space-y-2">
+            <div className="card flex gap-2 p-2">
+              <button
+                type="button"
+                onClick={() => toggleSeries(child.id)}
+                onPointerDown={stopDrag}
+                className="mt-0.5 text-slate-400 hover:text-white"
+              >
+                {expandedSeries.has(child.id) ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+              </button>
+              {child.poster ? (
+                <img src={child.poster} alt="" className="h-12 w-9 shrink-0 rounded object-cover" />
+              ) : (
+                <div className="h-12 w-9 shrink-0 rounded bg-ink-800" />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-medium">{child.title}</div>
+                <div className="mt-0.5 flex flex-wrap gap-1">
+                  <span className="chip bg-white/5 text-slate-400">series</span>
+                  {child.my_episode_progress && (
+                    <span className="chip bg-brand-500/15 text-brand-300">You: {child.my_episode_progress} eps</span>
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onRequestDelete(child)}
+                onPointerDown={stopDrag}
+                className="shrink-0 text-red-400"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </div>
+            {expandedSeries.has(child.id) && (
+              <SeriesExpandedPanel
+                item={child}
+                currentUserId={currentUserId}
+                onUpdate={onUpdate}
+                onParentRefresh={onParentRefresh}
+                onRequestDelete={onRequestDelete}
+                onFindStreams={onFindStreams}
+                onToast={onToast}
+              />
+            )}
+          </div>
+        ) : (
+          <CollectionMemberRow
+            key={child.id}
+            item={child}
+            currentUserId={currentUserId}
+            onUpdate={onUpdate}
+            onParentRefresh={onParentRefresh}
+            onRequestDelete={onRequestDelete}
+            onFindStreams={onFindStreams}
+          />
+        )
       )}
     </div>
   );
@@ -472,6 +816,7 @@ function SortableRow({
   expanded,
   onToggleExpand,
   onFindStreams,
+  onToast,
 }: {
   item: WatchlistItem;
   groups: WatchlistGroup[];
@@ -483,6 +828,7 @@ function SortableRow({
   expanded?: boolean;
   onToggleExpand?: () => void;
   onFindStreams: (target: StreamTarget) => void;
+  onToast: (msg: string, kind?: "success" | "error" | "info") => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
@@ -499,7 +845,8 @@ function SortableRow({
     onUpdate(next);
   };
 
-  const isSeries = item.kind === "series";
+  const isContainer = item.kind === "series" || item.kind === "collection";
+  const progressLabel = item.kind === "collection" ? "items" : "eps";
   const streamTarget = streamTargetFromWatchlistItem(item);
 
   return (
@@ -515,7 +862,7 @@ function SortableRow({
         )}
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-2">
-            {isSeries && onToggleExpand && (
+            {isContainer && onToggleExpand && (
               <button
                 type="button"
                 onClick={onToggleExpand}
@@ -533,16 +880,20 @@ function SortableRow({
               <div className="mt-0.5 flex flex-wrap gap-1">
                 <span className="chip bg-white/5 text-slate-400">{item.kind}</span>
                 {item.my_episode_progress && (
-                  <span className="chip bg-brand-500/15 text-brand-300">You: {item.my_episode_progress} eps</span>
+                  <span className="chip bg-brand-500/15 text-brand-300">
+                    You: {item.my_episode_progress} {progressLabel}
+                  </span>
                 )}
-                {item.group_episode_progress && item.kind === "series" && (
-                  <span className="chip bg-white/5 text-slate-400">Group: {item.group_episode_progress} eps</span>
+                {item.group_episode_progress && isContainer && (
+                  <span className="chip bg-white/5 text-slate-400">
+                    Group: {item.group_episode_progress} {progressLabel}
+                  </span>
                 )}
                 {item.library_match && <InLibraryChip />}
                 {item.everyone_watched && (
                   <span className="chip bg-emerald-500/15 text-emerald-300">everyone watched</span>
                 )}
-                {item.group_watch_progress && !item.everyone_watched && item.kind === "series" && (
+                {item.group_watch_progress && !item.everyone_watched && isContainer && (
                   <span className="chip bg-white/5 text-slate-400">{item.group_watch_progress} watched show</span>
                 )}
               </div>
@@ -551,7 +902,7 @@ function SortableRow({
                 currentUserId={currentUserId}
                 onToggleSelf={toggleWatched}
               />
-              {item.kind === "movie" && <ItemOverview item={item} />}
+              {item.kind === "movie" || item.kind === "collection" ? <ItemOverview item={item} /> : null}
             </div>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-3">
@@ -561,7 +912,7 @@ function SortableRow({
             <TitleMediaActions
               libraryMatch={item.library_match}
               onFindStreams={
-                streamTarget && item.kind !== "episode"
+                streamTarget && item.kind !== "episode" && item.kind !== "collection"
                   ? () => onFindStreams(streamTarget)
                   : undefined
               }
@@ -584,7 +935,7 @@ function SortableRow({
           </div>
         </div>
       </div>
-      {isSeries && expanded && (
+      {item.kind === "series" && expanded && (
         <SeriesExpandedPanel
           item={item}
           currentUserId={currentUserId}
@@ -592,6 +943,18 @@ function SortableRow({
           onParentRefresh={onRefresh}
           onRequestDelete={onRequestDelete}
           onFindStreams={onFindStreams}
+          onToast={onToast}
+        />
+      )}
+      {item.kind === "collection" && expanded && (
+        <CollectionExpandedPanel
+          item={item}
+          currentUserId={currentUserId}
+          onUpdate={onUpdate}
+          onParentRefresh={onRefresh}
+          onRequestDelete={onRequestDelete}
+          onFindStreams={onFindStreams}
+          onToast={onToast}
         />
       )}
     </div>
@@ -1019,8 +1382,9 @@ export function Watchlist({
                       onRefresh={refreshItems}
                       expanded={expanded.has(item.id)}
                       onFindStreams={setStreamTarget}
+                      onToast={pushToast}
                       onToggleExpand={
-                        item.kind === "series"
+                        item.kind === "series" || item.kind === "collection"
                           ? () =>
                               setExpanded((prev) => {
                                 const next = new Set(prev);

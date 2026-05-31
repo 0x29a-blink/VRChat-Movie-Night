@@ -1,4 +1,17 @@
-import { Film, Link2, ListPlus, Loader2, Pencil, Play, RefreshCw, Trash2, Unlink, Youtube, X } from "lucide-react";
+import {
+  Film,
+  Languages,
+  Link2,
+  ListPlus,
+  Loader2,
+  Pencil,
+  Play,
+  RefreshCw,
+  Trash2,
+  Unlink,
+  Youtube,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { fmtBytes, fmtDuration } from "../format";
@@ -7,6 +20,7 @@ import { AddToWatchlistButton } from "./AddToWatchlist";
 import { ConfirmModal } from "./ConfirmModal";
 import { LinkTmdbModal } from "./LinkTmdbModal";
 import { libraryLinkLabel, watchlistPayloadFromLibraryItem } from "./libraryWatchlist";
+import { PlaybackTracksPanel } from "./PlaybackTracksPanel";
 import { usePlayback } from "./PlaybackContext";
 import { useToast } from "./Toast";
 
@@ -29,6 +43,7 @@ export function Library({ version }: { version: number }) {
   const [unlinkBusy, setUnlinkBusy] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<LibraryItem | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [tracksItemId, setTracksItemId] = useState<number | null>(null);
 
   const load = () => {
     api
@@ -245,6 +260,21 @@ export function Library({ version }: { version: number }) {
                       )}
                       <div className="mt-0.5 text-xs text-slate-500">{fmtBytes(item.size)}</div>
                       <div className="mt-1.5 flex flex-col gap-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setTracksItemId((id) => (id === item.id ? null : item.id))
+                          }
+                          className={`btn-ghost w-full justify-center py-1 text-[11px] ${
+                            tracksItemId === item.id ? "text-brand-300" : ""
+                          }`}
+                        >
+                          <Languages className="h-3 w-3" />
+                          {tracksItemId === item.id ? "Hide tracks" : "Audio & subtitles"}
+                        </button>
+                        {tracksItemId === item.id && (
+                          <PlaybackTracksPanel libraryId={item.id} compact />
+                        )}
                         {item.linked ? (
                           <button
                             type="button"

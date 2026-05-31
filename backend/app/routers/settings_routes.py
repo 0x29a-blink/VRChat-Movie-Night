@@ -23,6 +23,24 @@ def update_settings(values: dict):
     return settings_store.public()
 
 
+@router.post("/aiostreams/reload")
+def reload_aiostreams_config():
+    """Re-read local AIOStreams install (BASE_URL + saved configure UUID)."""
+    discovered = settings_store.get_aiostreams_discovered()
+    return {
+        "ok": bool(discovered) or not settings_store.is_aiostreams_auto(),
+        "discovered": discovered,
+        **settings_store.aiostreams_public_fields(),
+    }
+
+
+@router.post("/aiostreams/reset-auto")
+def reset_aiostreams_auto():
+    """Switch back to auto-detect from local AIOStreams and clear manual URL."""
+    settings_store.reset_aiostreams_auto()
+    return settings_store.public()
+
+
 @router.post("/test-obs")
 async def test_obs():
     controller._reset()  # noqa: SLF001

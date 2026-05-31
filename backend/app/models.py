@@ -30,6 +30,8 @@ class Job(Base):
     link_season = mapped_column(Integer, nullable=True)
     link_episode = mapped_column(Integer, nullable=True)
     link_watchlist_id = mapped_column(Integer, nullable=True)
+    link_stremio_id: Mapped[str] = mapped_column(String, default="")
+    link_series_title: Mapped[str] = mapped_column(String, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
@@ -72,6 +74,10 @@ class LibraryItem(Base):
     tmdb_poster: Mapped[str] = mapped_column(String, default="")
     tmdb_year: Mapped[str] = mapped_column(String, default="")
     episode_title: Mapped[str] = mapped_column(String, default="")
+    stremio_id: Mapped[str] = mapped_column(String, default="", index=True)
+    playback_audio_index = mapped_column(Integer, nullable=True)
+    playback_subtitle_index = mapped_column(Integer, nullable=True)
+    playback_burn_subtitles: Mapped[bool] = mapped_column(Boolean, default=False)
     added_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     def display_title(self) -> str:
@@ -108,7 +114,11 @@ class LibraryItem(Base):
             "tmdb_poster": self.tmdb_poster or "",
             "tmdb_year": self.tmdb_year or "",
             "episode_title": self.episode_title or "",
-            "linked": bool(self.tmdb_id),
+            "stremio_id": self.stremio_id or None,
+            "linked": bool(self.tmdb_id or self.stremio_id),
+            "playback_audio_index": self.playback_audio_index,
+            "playback_subtitle_index": self.playback_subtitle_index,
+            "playback_burn_subtitles": bool(self.playback_burn_subtitles),
             "added_at": self.added_at.isoformat() if self.added_at else None,
         }
 
@@ -182,7 +192,7 @@ class WatchlistItem(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     group_id = mapped_column(Integer, ForeignKey("watchlist_groups.id"), nullable=True, index=True)
     parent_id = mapped_column(Integer, ForeignKey("watchlist_items.id"), nullable=True, index=True)
-    kind: Mapped[str] = mapped_column(String, index=True)  # movie | series | episode
+    kind: Mapped[str] = mapped_column(String, index=True)  # movie | series | episode | collection
     tmdb_id = mapped_column(Integer, nullable=True)
     media_type: Mapped[str] = mapped_column(String, default="movie")  # movie | series
     season = mapped_column(Integer, nullable=True)
@@ -192,6 +202,7 @@ class WatchlistItem(Base):
     year: Mapped[str] = mapped_column(String, default="")
     overview: Mapped[str] = mapped_column(Text, default="")
     air_date: Mapped[str] = mapped_column(String, default="")
+    stremio_id: Mapped[str] = mapped_column(String, default="", index=True)
     library_item_id = mapped_column(Integer, ForeignKey("library_items.id"), nullable=True)
     list_section: Mapped[str] = mapped_column(String, default="to_watch", index=True)  # to_watch | watched
     sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)

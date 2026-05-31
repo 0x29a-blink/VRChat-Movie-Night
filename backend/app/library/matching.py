@@ -11,6 +11,35 @@ def _normalize_title_name(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", t.lower())
 
 
+def find_library_by_stremio(
+    db: Session,
+    stremio_id: str,
+    season: int | None = None,
+    episode: int | None = None,
+) -> LibraryItem | None:
+    sid = (stremio_id or "").strip()
+    if not sid:
+        return None
+    q = db.query(LibraryItem).filter(LibraryItem.stremio_id == sid)
+    if season is not None and episode is not None:
+        q = q.filter(LibraryItem.season == season, LibraryItem.episode == episode)
+    for lib in q.order_by(LibraryItem.id.desc()).all():
+        if Path(lib.path).is_file():
+            return lib
+
+    if season is None or episode is None:
+        return None
+
+    ep_pat = re.compile(rf"s0*{season}[^0-9]*e0*{episode}\b", re.I)
+    for lib in db.query(LibraryItem).filter(LibraryItem.folder.in_(["torrents", "m3u8"])).all():
+        if not Path(lib.path).is_file():
+            continue
+        text = f"{lib.title} {lib.filename}"
+        if ep_pat.search(text):
+            return lib
+    return None
+
+
 def find_library_by_tmdb(
     db: Session,
     tmdb_id: int,
