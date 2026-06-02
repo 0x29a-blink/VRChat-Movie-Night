@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Trash2,
   Unlink,
+  RefreshCcw,
   Youtube,
   X,
 } from "lucide-react";
@@ -40,6 +41,7 @@ export function Library({ version }: { version: number }) {
   const [renameValue, setRenameValue] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
   const [linkItem, setLinkItem] = useState<LibraryItem | null>(null);
+  const [linkMode, setLinkMode] = useState<"link" | "relink">("link");
   const [unlinkBusy, setUnlinkBusy] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<LibraryItem | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -176,6 +178,16 @@ export function Library({ version }: { version: number }) {
                           {libraryLinkLabel(item)}
                         </span>
                       )}
+                      {item.linked && item.on_watchlist === false && (
+                        <span className="absolute right-1.5 top-1.5 chip border border-amber-500/50 bg-amber-500/20 text-amber-200">
+                          Not on watchlist
+                        </span>
+                      )}
+                      {item.linked && item.on_watchlist && (
+                        <span className="absolute right-1.5 top-1.5 chip bg-emerald-500/20 text-emerald-300">
+                          On watchlist
+                        </span>
+                      )}
                       <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/60 opacity-0 transition-opacity group-hover:opacity-100">
                         <button
                           onClick={() => playNow(item)}
@@ -276,34 +288,58 @@ export function Library({ version }: { version: number }) {
                           <PlaybackTracksPanel libraryId={item.id} compact />
                         )}
                         {item.linked ? (
-                          <button
-                            type="button"
-                            disabled={unlinkBusy === item.id}
-                            onClick={() => unlink(item)}
-                            className="btn-ghost w-full justify-center py-1 text-[11px] text-slate-400"
-                          >
-                            {unlinkBusy === item.id ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : (
-                              <>
-                                <Unlink className="h-3 w-3" /> Unlink TMDB
-                              </>
-                            )}
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setLinkMode("relink");
+                                setLinkItem(item);
+                              }}
+                              className="btn-ghost w-full justify-center py-1 text-[11px]"
+                            >
+                              <RefreshCcw className="h-3 w-3" /> Relink
+                            </button>
+                            <button
+                              type="button"
+                              disabled={unlinkBusy === item.id}
+                              onClick={() => unlink(item)}
+                              className="btn-ghost w-full justify-center py-1 text-[11px] text-slate-400"
+                            >
+                              {unlinkBusy === item.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <>
+                                  <Unlink className="h-3 w-3" /> Unlink TMDB
+                                </>
+                              )}
+                            </button>
+                          </>
                         ) : (
                           <button
                             type="button"
-                            onClick={() => setLinkItem(item)}
+                            onClick={() => {
+                              setLinkMode("link");
+                              setLinkItem(item);
+                            }}
                             className="btn-ghost w-full justify-center py-1 text-[11px]"
                           >
                             <Link2 className="h-3 w-3" /> Link to movie/show
                           </button>
                         )}
-                        <AddToWatchlistButton
-                          payload={watchlistPayloadFromLibraryItem(item)}
-                          label="Watchlist"
-                          className="btn-ghost w-full justify-center py-1 text-[11px]"
-                        />
+                        {item.linked && !item.on_watchlist && (
+                          <AddToWatchlistButton
+                            payload={watchlistPayloadFromLibraryItem(item)}
+                            label="Add to watchlist"
+                            className="btn-ghost w-full justify-center py-1 text-[11px] text-amber-300"
+                          />
+                        )}
+                        {!item.linked && (
+                          <AddToWatchlistButton
+                            payload={watchlistPayloadFromLibraryItem(item)}
+                            label="Watchlist"
+                            className="btn-ghost w-full justify-center py-1 text-[11px]"
+                          />
+                        )}
                       </div>
                     </div>
                   </div>
@@ -317,6 +353,7 @@ export function Library({ version }: { version: number }) {
       {linkItem && (
         <LinkTmdbModal
           item={linkItem}
+          mode={linkMode}
           onClose={() => setLinkItem(null)}
           onLinked={() => load()}
         />

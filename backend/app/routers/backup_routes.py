@@ -17,6 +17,7 @@ from ..models import (
     WatchlistComment,
     WatchlistGroup,
     WatchlistItem,
+    WatchlistItemUserExclusion,
     WheelPreset,
 )
 
@@ -35,6 +36,10 @@ def export_backup(
             "id": u.id,
             "username": u.username,
             "role": u.role,
+            "watchlist_stats_excluded": bool(u.watchlist_stats_excluded),
+            "watchlist_stats_excluded_at": u.watchlist_stats_excluded_at.isoformat()
+            if u.watchlist_stats_excluded_at
+            else None,
             "created_at": u.created_at.isoformat() if u.created_at else None,
         }
         for u in db.query(User).order_by(User.id).all()
@@ -99,6 +104,11 @@ def export_backup(
         for c in db.query(WatchlistComment).order_by(WatchlistComment.id).all()
     ]
 
+    item_user_exclusions = [
+        {"item_id": row.item_id, "user_id": row.user_id}
+        for row in db.query(WatchlistItemUserExclusion).order_by(WatchlistItemUserExclusion.id).all()
+    ]
+
     library = [
         {
             "id": lib.id,
@@ -142,6 +152,7 @@ def export_backup(
         "user_watch_status": watch_status,
         "user_ratings": ratings,
         "watchlist_comments": comments,
+        "watchlist_item_user_exclusions": item_user_exclusions,
         "library_items": library,
         "wheel_presets": wheel_presets,
         "settings": settings,
@@ -185,6 +196,12 @@ def import_backup(
         old = backup_users.get(u.username)
         if old:
             user_id_map[old["id"]] = u.id
+            if "watchlist_stats_excluded" in old:
+                u.watchlist_stats_excluded = bool(old["watchlist_stats_excluded"])
+            if old.get("watchlist_stats_excluded_at"):
+                u.watchlist_stats_excluded_at = _parse_dt(old["watchlist_stats_excluded_at"])
+            elif not old.get("watchlist_stats_excluded"):
+                u.watchlist_stats_excluded_at = None
 
     lib_id_map: dict[int, int] = {}
     for lib in payload.get("library_items", []):
@@ -198,6 +215,7 @@ def import_backup(
     db.query(WatchlistComment).delete(synchronize_session=False)
     db.query(UserRating).delete(synchronize_session=False)
     db.query(UserWatchStatus).delete(synchronize_session=False)
+    db.query(WatchlistItemUserExclusion).delete(synchronize_session=False)
     db.query(WatchlistItem).filter(WatchlistItem.parent_id.isnot(None)).delete(synchronize_session=False)
     db.query(WatchlistItem).filter(WatchlistItem.parent_id.is_(None)).delete(synchronize_session=False)
     db.query(WatchlistGroup).delete(synchronize_session=False)
@@ -295,6 +313,14 @@ def import_backup(
             db.add(row)
             comments_added += 1
 
+    exclusions_added = 0
+    for ex in payload.get("watchlist_item_user_exclusions", []):
+        uid = user_id_map.get(ex.get("user_id"))
+        iid = item_id_map.get(ex.get("item_id"))
+        if uid and iid:
+            db.add(WatchlistItemUserExclusion(item_id=iid, user_id=uid))
+            exclusions_added += 1
+
     presets_added = 0
     for p in payload.get("wheel_presets", []):
         labels = p.get("labels") or []
@@ -332,6 +358,7 @@ def import_backup(
         "ratings": ratings_added,
         "watch_status": watch_added,
         "comments": comments_added,
+        "watchlist_item_user_exclusions": exclusions_added,
         "wheel_presets": presets_added,
         "settings_merged": settings_merged,
         "users_mapped": len(user_id_map),

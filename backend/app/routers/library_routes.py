@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from .. import auth
 from ..db import SessionLocal, get_db
 from ..library.linking import apply_tmdb_link, sync_queue_from_library, sync_watchlist_from_library
-from ..library.matching import find_library_by_stremio, find_library_by_tmdb
+from ..library.matching import find_library_by_stremio, find_library_by_tmdb, library_item_on_watchlist
 from ..library.playback import build_playback_file, probe_media_tracks
 from ..library.scanner import scan_all
 from ..models import LibraryItem, QueueItem, WatchlistItem
@@ -52,7 +52,9 @@ def list_library():
         items = s.query(LibraryItem).order_by(LibraryItem.added_at.desc()).all()
         grouped: dict[str, list] = {"youtube": [], "m3u8": [], "torrents": []}
         for item in items:
-            grouped.setdefault(item.folder, []).append(item.to_dict())
+            row = item.to_dict()
+            row["on_watchlist"] = library_item_on_watchlist(s, item)
+            grouped.setdefault(item.folder, []).append(row)
         return grouped
 
 

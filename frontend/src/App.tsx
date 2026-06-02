@@ -7,6 +7,7 @@ import {
   ListVideo,
   Loader2,
   LogOut,
+  Menu,
   Pause,
   Settings as SettingsIcon,
   Wifi,
@@ -68,12 +69,14 @@ function AppShell() {
     readStreamLaunchFromLocation()
   );
   const [checklistIssues, setChecklistIssues] = useState(0);
+  const [navOpen, setNavOpen] = useState(false);
 
   const goToQueue = useCallback(() => setTab("queue"), []);
 
   const navigateTab = useCallback(
     (next: Tab, groupId?: number) => {
       setTab(next);
+      setNavOpen(false);
       const gid = next === "watchlist" ? (groupId ?? watchlistGroupId) : undefined;
       if (groupId != null) setWatchlistGroupId(groupId);
       writeNavToLocation({ tab: next, watchlistGroupId: gid });
@@ -222,8 +225,21 @@ function AppShell() {
 
   return (
     <PlaybackProvider obs={obs} onGoToQueue={goToQueue}>
-      <div className="flex h-full">
-        <aside className="flex w-64 shrink-0 flex-col border-r border-white/5 bg-ink-900/60 p-4">
+      <div className={`flex h-full ${navOpen ? "overflow-hidden lg:overflow-visible" : ""}`}>
+        {navOpen && (
+          <button
+            type="button"
+            aria-label="Close menu"
+            className="fixed inset-0 z-30 bg-black/60 lg:hidden"
+            onClick={() => setNavOpen(false)}
+          />
+        )}
+
+        <aside
+          className={`fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col border-r border-white/5 bg-ink-900/95 p-4 backdrop-blur transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0 lg:bg-ink-900/60 ${
+            navOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
+        >
           <div className="mb-8 flex items-center gap-3 px-2">
             <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-brand-500 to-accent-500 shadow-glow">
               <Clapperboard className="h-5 w-5 text-white" />
@@ -304,6 +320,20 @@ function AppShell() {
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="flex shrink-0 items-center gap-2 border-b border-white/5 px-4 py-2 lg:hidden">
+            <button
+              type="button"
+              onClick={() => setNavOpen(true)}
+              className="btn-ghost !px-2 !py-2"
+              aria-label="Open menu"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+            <span className="truncate text-sm font-medium text-slate-200">
+              {NAV.find((n) => n.id === tab)?.label ?? "Movie Night"}
+            </span>
+          </div>
+
           {(paused || showGoLiveWarning) && (
             <div
               className={`shrink-0 border-b px-4 py-2.5 text-sm ${

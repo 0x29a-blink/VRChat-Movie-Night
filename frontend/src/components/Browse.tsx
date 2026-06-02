@@ -1,6 +1,7 @@
 import { Check, Download, FolderOpen, Layers, Loader2, Search, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { isAnimeStremioId } from "../animeIds";
 import { AddToWatchlistButton, type WatchlistAddPayload } from "./AddToWatchlist";
 import { StreamOpenLink, StreamNewTabButton, BROWSE_CARD } from "./StreamOpenLink";
 import type { BrowseItem, CatalogInfo, SearchResult, TmdbCollectionSummary } from "../types";
@@ -96,13 +97,29 @@ function catalogKey(c: CatalogInfo) {
   return `${c.type}:${c.id}`;
 }
 
+function isGenreExtra(name: string) {
+  return name.trim().toLowerCase() === "genre";
+}
+
 function defaultCatalogExtras(cat: CatalogInfo | null): Record<string, string> {
   const out: Record<string, string> = {};
   if (!cat) return out;
-  for (const extra of cat.extras) {
-    if (extra.options?.length) out[extra.name] = extra.options[0];
+  for (const extra of visibleCatalogExtras(cat)) {
+    const name = extra.name || "";
+    if (isGenreExtra(name) || !extra.required) {
+      out[name] = "";
+    } else if (extra.options?.length) {
+      out[name] = extra.options[0];
+    }
   }
   return out;
+}
+
+function visibleCatalogExtras(cat: CatalogInfo) {
+  return cat.extras.filter((extra) => {
+    const name = (extra.name || "").trim().toLowerCase();
+    return name !== "skip" && name !== "search";
+  });
 }
 
 function CatalogExtrasPanel({
@@ -111,19 +128,23 @@ function CatalogExtrasPanel({
   onChange,
   onApply,
   loading,
+  inline = false,
 }: {
   catalog: CatalogInfo;
   values: Record<string, string>;
   onChange: (name: string, value: string) => void;
   onApply: () => void;
   loading: boolean;
+  inline?: boolean;
 }) {
   if (!catalog.extras.length) return null;
+  const extras = visibleCatalogExtras(catalog);
+  if (!extras.length) return null;
   return (
-    <div className="card space-y-3 p-4">
+    <div className={inline ? "space-y-3" : "card space-y-3 p-4"}>
       <div className="text-xs font-medium text-slate-300">Catalog options</div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {catalog.extras.map((extra) => (
+      <div className={`grid gap-3 ${inline ? "" : "sm:grid-cols-2"}`}>
+        {extras.map((extra) => (
           <label key={extra.name} className="block text-xs text-slate-400">
             {extra.name}
             {extra.required ? " *" : ""}
@@ -132,7 +153,7 @@ function CatalogExtrasPanel({
               value={values[extra.name] ?? ""}
               onChange={(e) => onChange(extra.name, e.target.value)}
             >
-              {!extra.required && <option value="">—</option>}
+              {(!extra.required || isGenreExtra(extra.name)) && <option value="">All</option>}
               {extra.options.map((opt) => (
                 <option key={opt} value={opt}>
                   {opt}
@@ -387,8 +408,11 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
         return;
       }
       const resolved = res.title;
+      const catalogSid = (item.stremio_id || "").trim();
       onPickTitle({
         ...resolved,
+        stremio_id: resolved.stremio_id || catalogSid,
+        anime_native: resolved.anime_native || isAnimeStremioId(catalogSid),
         poster: resolved.poster || item.poster,
         overview: resolved.overview || item.overview,
       });
@@ -708,8 +732,14 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
                 onFilterChange={setCatalogFilter}
               />
               {selectedCatalog && (
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                  <label className="block flex-1 text-xs text-slate-400">
+                <div
+                  className={`grid gap-3 ${
+                    visibleCatalogExtras(selectedCatalog).length > 0
+                      ? "lg:grid-cols-2 lg:items-end"
+                      : ""
+                  }`}
+                >
+                  <label className="block text-xs text-slate-400">
                     Search this catalog
                     <div className="relative mt-1">
                       <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
@@ -722,19 +752,18 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
                       />
                     </div>
                   </label>
+                  <CatalogExtrasPanel
+                    catalog={selectedCatalog}
+                    values={catalogExtras}
+                    onChange={(name, value) => setCatalogExtras((prev) => ({ ...prev, [name]: value }))}
+                    onApply={() => {
+                      setItems([]);
+                      loadCatalogItems(false);
+                    }}
+                    loading={loadingItems}
+                    inline
+                  />
                 </div>
-              )}
-              {selectedCatalog && (
-                <CatalogExtrasPanel
-                  catalog={selectedCatalog}
-                  values={catalogExtras}
-                  onChange={(name, value) => setCatalogExtras((prev) => ({ ...prev, [name]: value }))}
-                  onApply={() => {
-                    setItems([]);
-                    loadCatalogItems(false);
-                  }}
-                  loading={loadingItems}
-                />
               )}
               {loadingItems && items.length === 0 ? (
                 <div className="flex items-center gap-2 py-6 text-sm text-slate-400">

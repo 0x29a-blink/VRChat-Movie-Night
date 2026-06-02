@@ -8,11 +8,13 @@ export function TitleMediaActions({
   onFindStreams,
   libraryMatch,
   compact = false,
+  hideLibraryChip = false,
   onPointerDown,
 }: {
   onFindStreams?: () => void;
   libraryMatch?: LibraryItem | null;
   compact?: boolean;
+  hideLibraryChip?: boolean;
   onPointerDown?: (e: React.PointerEvent | React.MouseEvent) => void;
 }) {
   const { playFromLibrary, queueFromLibrary } = usePlayback();
@@ -43,8 +45,8 @@ export function TitleMediaActions({
   const cls = compact ? "btn-ghost px-1 py-0.5 text-[10px]" : "btn-ghost text-xs";
 
   return (
-    <div className="flex flex-wrap items-center gap-1" onPointerDown={onPointerDown}>
-      {libraryMatch && !compact && <InLibraryChip />}
+    <div className="flex shrink-0 flex-wrap items-center gap-1" onPointerDown={onPointerDown}>
+      {libraryMatch && !compact && !hideLibraryChip && <InLibraryChip />}
       {libraryMatch && (
         <>
           <button type="button" disabled={busy} onClick={playNow} className={`${cls} border border-brand-500/30`}>

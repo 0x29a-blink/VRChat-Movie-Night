@@ -20,10 +20,66 @@ import {
 } from "../streamOpenUrl";
 import { loadStreamFilters, saveStreamFilters } from "../streamFilters";
 import { filterAndSortStreams, streamKey } from "../streamListUtils";
+import { isAnimeStremioId, animeProviderLabel } from "../animeIds";
 
 type MoviesMode = "search" | "browse";
 
+type SeasonRow = { season_number: number; name: string; episode_count: number };
+
+type MetadataProvider = {
+  key: string;
+  label: string;
+  kind: "tmdb" | "anime";
+  tmdb_id?: number;
+};
+
 const INITIAL_FILTERS = loadStreamFilters();
+
+function normalizeSeasons(rows: SeasonRow[]): SeasonRow[] {
+  return rows
+    .filter((s) => s.season_number > 0 && s.episode_count > 0)
+    .map((s) => ({
+      ...s,
+      name: (s.name || "").trim() || `Season ${s.season_number}`,
+    }));
+}
+
+function seasonOptionLabel(s: SeasonRow): string {
+  return `${s.name} (${s.episode_count} eps)`;
+}
+
+function buildMetadataProviders(r: SearchResult, tmdbCandidates: SearchResult[]): MetadataProvider[] {
+  const out: MetadataProvider[] = [];
+  const seenTmdb = new Set<number>();
+  if (r.stremio_id && isAnimeStremioId(r.stremio_id)) {
+    out.push({
+      key: `anime:${r.stremio_id}`,
+      label: animeProviderLabel(r.stremio_id),
+      kind: "anime",
+    });
+  }
+  for (const hit of tmdbCandidates) {
+    if (!hit.tmdb_id || hit.type !== "series" || seenTmdb.has(hit.tmdb_id)) continue;
+    seenTmdb.add(hit.tmdb_id);
+    out.push({
+      key: `tmdb:${hit.tmdb_id}`,
+      label: `TMDB — ${hit.title}${hit.year ? ` (${hit.year})` : ""}`,
+      kind: "tmdb",
+      tmdb_id: hit.tmdb_id,
+    });
+  }
+  return out;
+}
+
+function pickDefaultMetadataKey(r: SearchResult, providers: MetadataProvider[]): string {
+  if (!providers.length) return "";
+  const year = (r.year || "").slice(0, 4);
+  if (year) {
+    const yearMatch = providers.find((p) => p.kind === "tmdb" && p.label.includes(`(${year})`));
+    if (yearMatch) return yearMatch.key;
+  }
+  return providers.find((p) => p.kind === "tmdb")?.key ?? providers[0].key;
+}
 
 export function Search({
   initialStreamLaunch,
@@ -44,6 +100,8 @@ export function Search({
   const [episode, setEpisode] = useState<number | undefined>();
   const [episodes, setEpisodes] = useState<TmdbEpisode[]>([]);
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
+  const [metadataProviders, setMetadataProviders] = useState<MetadataProvider[]>([]);
+  const [activeMetadataKey, setActiveMetadataKey] = useState("");
 
   const [streams, setStreams] = useState<StreamResult[]>([]);
   const [loadingStreams, setLoadingStreams] = useState(false);
@@ -158,6 +216,114 @@ export function Search({
     }
   };
 
+  const isAnimeTitle = (r: SearchResult) =>
+    Boolean(r.anime_native || isAnimeStremioId(r.stremio_id));
+
+  const loadEpisodesForProvider = async (
+    r: SearchResult,
+    provider: MetadataProvider | undefined,
+    seasonNum: number
+  ) => {
+    if (provider?.kind === "tmdb" && provider.tmdb_id) {
+      return (await api.seasonEpisodes(provider.tmdb_id, seasonNum)).episodes;
+    }
+    if (provider?.kind === "anime" && r.stremio_id) {
+      return (await api.animeSeasonEpisodes(r.stremio_id, seasonNum)).episodes;
+    }
+    if (r.tmdb_id) {
+      return (await api.seasonEpisodes(r.tmdb_id, seasonNum)).episodes;
+    }
+    if (r.stremio_id) {
+      return (await api.animeSeasonEpisodes(r.stremio_id, seasonNum)).episodes;
+    }
+    return [];
+  };
+
+  const applyMetadataProvider = async (
+    r: SearchResult,
+    providerKey: string,
+    providers: MetadataProvider[],
+    initialSeason?: number
+  ) => {
+    const provider = providers.find((p) => p.key === providerKey);
+    if (!provider) return r;
+
+    setActiveMetadataKey(providerKey);
+    setSeason(undefined);
+    setEpisode(undefined);
+    setEpisodes([]);
+    setStreams([]);
+    setStreamsFetched(false);
+    setActiveVideoId("");
+
+    let enriched = r;
+    let normalized: SeasonRow[] = [];
+
+    if (provider.kind === "tmdb" && provider.tmdb_id) {
+      enriched = { ...r, tmdb_id: provider.tmdb_id };
+      setSelected(enriched);
+      const d = await api.titleDetails(provider.tmdb_id, "series");
+      normalized = normalizeSeasons(d.seasons || []);
+    } else if (r.stremio_id) {
+      const d = await api.animeMeta(r.stremio_id);
+      normalized = normalizeSeasons(d.seasons || []);
+      setSelected(enriched);
+    }
+
+    setSeasons(normalized);
+
+    const pickSeason =
+      initialSeason != null && normalized.some((s) => s.season_number === initialSeason)
+        ? initialSeason
+        : normalized[0]?.season_number;
+
+    if (pickSeason != null) {
+      setSeason(pickSeason);
+      setLoadingEpisodes(true);
+      try {
+        setEpisodes(await loadEpisodesForProvider(enriched, provider, pickSeason));
+      } catch {
+        setEpisodes([]);
+      } finally {
+        setLoadingEpisodes(false);
+      }
+    }
+
+    return enriched;
+  };
+
+  const selectInitialSeason = async (
+    r: SearchResult,
+    normalized: SeasonRow[],
+    provider: MetadataProvider | undefined,
+    initialSeason?: number,
+    initialEpisode?: number
+  ) => {
+    setSeasons(normalized);
+    const pickSeason =
+      initialSeason != null && normalized.some((s) => s.season_number === initialSeason)
+        ? initialSeason
+        : normalized[0]?.season_number;
+    if (pickSeason == null) return;
+
+    setSeason(pickSeason);
+    setLoadingEpisodes(true);
+    try {
+      const eps = await loadEpisodesForProvider(r, provider, pickSeason);
+      setEpisodes(eps);
+      if (initialEpisode != null) {
+        setEpisode(initialEpisode);
+        const ep = eps.find((e) => e.episode_number === initialEpisode);
+        if (ep?.video_stremio_id) setActiveVideoId(ep.video_stremio_id);
+        await loadStreams(r, pickSeason, initialEpisode);
+      }
+    } catch {
+      setEpisodes([]);
+    } finally {
+      setLoadingEpisodes(false);
+    }
+  };
+
   const pickTitle = async (
     r: SearchResult,
     opts?: { fromBrowse?: boolean; season?: number; episode?: number }
@@ -176,26 +342,41 @@ export function Search({
     setLibraryMatch(null);
     setActiveVideoId("");
     setError("");
+    setMetadataProviders([]);
+    setActiveMetadataKey("");
 
-    if (r.type === "series" && r.anime_native && r.stremio_id) {
+    if (r.type === "series" && isAnimeTitle(r) && r.stremio_id) {
       try {
-        const d = await api.animeMeta(r.stremio_id);
-        setSeasons(d.seasons || []);
-        if (opts?.season != null) {
-          setLoadingEpisodes(true);
-          try {
-            const epRes = await api.animeSeasonEpisodes(r.stremio_id, opts.season);
-            setEpisodes(epRes.episodes);
-            const ep = epRes.episodes.find((e) => e.episode_number === opts.episode);
-            if (ep?.video_stremio_id) setActiveVideoId(ep.video_stremio_id);
-          } catch {
-            setEpisodes([]);
-          } finally {
-            setLoadingEpisodes(false);
+        let tmdbCandidates: SearchResult[] = [];
+        try {
+          const hits = await api.search(r.title);
+          tmdbCandidates = hits.filter((h) => h.type === "series" && h.tmdb_id);
+          if (r.tmdb_id && !tmdbCandidates.some((h) => h.tmdb_id === r.tmdb_id)) {
+            tmdbCandidates.unshift({ ...r, type: "series" });
           }
-          if (opts.episode != null) {
-            await loadStreams(r, opts.season, opts.episode);
+        } catch {
+          /* ignore TMDB search failure */
+        }
+
+        const providers = buildMetadataProviders(r, tmdbCandidates);
+        setMetadataProviders(providers);
+
+        if (providers.length) {
+          const defaultKey = pickDefaultMetadataKey(r, providers);
+          const enriched = await applyMetadataProvider(r, defaultKey, providers, opts?.season);
+          if (opts?.season != null && opts.episode != null) {
+            setEpisode(opts.episode);
+            await loadStreams(enriched, opts.season, opts.episode);
           }
+        } else {
+          const d = await api.animeMeta(r.stremio_id);
+          await selectInitialSeason(
+            r,
+            normalizeSeasons(d.seasons || []),
+            undefined,
+            opts?.season,
+            opts?.episode
+          );
         }
       } catch {
         setError("Could not load anime metadata from AIOStreams.");
@@ -206,21 +387,13 @@ export function Search({
     if (r.type === "series") {
       try {
         const d = await api.titleDetails(r.tmdb_id, r.type);
-        setSeasons(d.seasons || []);
-        if (opts?.season != null) {
-          setLoadingEpisodes(true);
-          try {
-            const epRes = await api.seasonEpisodes(r.tmdb_id, opts.season);
-            setEpisodes(epRes.episodes);
-          } catch {
-            setEpisodes([]);
-          } finally {
-            setLoadingEpisodes(false);
-          }
-          if (opts.episode != null) {
-            await loadStreams(r, opts.season, opts.episode);
-          }
-        }
+        await selectInitialSeason(
+          r,
+          normalizeSeasons(d.seasons || []),
+          undefined,
+          opts?.season,
+          opts?.episode
+        );
       } catch {
         /* ignore */
       }
@@ -240,7 +413,7 @@ export function Search({
     }
     const activeSeason = selected.type === "series" ? season : undefined;
     const activeEpisode = selected.type === "series" && season != null && episode != null ? episode : undefined;
-    if (selected.anime_native && selected.stremio_id) {
+    if (isAnimeTitle(selected) && selected.stremio_id) {
       api
         .libraryMatch({
           mediaType: "series",
@@ -276,13 +449,8 @@ export function Search({
     if (!selected) return;
     setLoadingEpisodes(true);
     try {
-      if (selected.anime_native && selected.stremio_id) {
-        const r = await api.animeSeasonEpisodes(selected.stremio_id, seasonNum);
-        setEpisodes(r.episodes);
-      } else {
-        const r = await api.seasonEpisodes(selected.tmdb_id, seasonNum);
-        setEpisodes(r.episodes);
-      }
+      const provider = metadataProviders.find((p) => p.key === activeMetadataKey);
+      setEpisodes(await loadEpisodesForProvider(selected, provider, seasonNum));
     } catch {
       setEpisodes([]);
     } finally {
@@ -305,15 +473,24 @@ export function Search({
     setStreams([]);
     try {
       let res;
-      if (r.anime_native && r.stremio_id) {
+      const provider = metadataProviders.find((p) => p.key === activeMetadataKey);
+      const tmdbId = provider?.kind === "tmdb" ? provider.tmdb_id : r.tmdb_id;
+      const useTmdb =
+        provider?.kind === "tmdb" || (!provider && !isAnimeTitle(r)) || (!provider && r.tmdb_id && !r.stremio_id);
+
+      if (useTmdb && tmdbId && (s != null && ep != null || !isAnimeTitle(r))) {
+        res = await api.streams(tmdbId, r.type, s, ep);
+      } else if (isAnimeTitle(r) && r.stremio_id) {
         const epRow = episodes.find((e) => e.episode_number === ep);
         const videoId = activeVideoId || epRow?.video_stremio_id || "";
         if (!videoId && s != null && ep != null) {
           throw new Error("No episode video id from AIOStreams meta — pick an episode again.");
         }
         res = await api.streamsStremio(videoId, r.stremio_id, s, ep);
+      } else if (tmdbId) {
+        res = await api.streams(tmdbId, r.type, s, ep);
       } else {
-        res = await api.streams(r.tmdb_id, r.type, s, ep);
+        throw new Error("No metadata source available for streams.");
       }
       if (reqId !== streamsRequest.current) return;
       setStreams(res.streams);
@@ -330,7 +507,7 @@ export function Search({
 
   const currentLinkMeta = () => {
     if (!selected) return undefined;
-    if (selected.anime_native && selected.stremio_id) {
+    if (isAnimeTitle(selected) && selected.stremio_id) {
       return downloadLinkMetaFromAnime(selected, season, episode);
     }
     if (!selected.tmdb_id) return undefined;
@@ -440,7 +617,11 @@ export function Search({
         </button>
       </div>
 
-      {mode === "browse" && !selected && <Browse onPickTitle={(r) => pickTitle(r, { fromBrowse: true })} />}
+      {mode === "browse" && (
+        <div className={selected ? "hidden" : undefined}>
+          <Browse onPickTitle={(r) => pickTitle(r, { fromBrowse: true })} />
+        </div>
+      )}
 
       {mode === "search" && (
       <form onSubmit={doSearch} className="flex gap-2">
@@ -532,6 +713,8 @@ export function Search({
               setSelected(null);
               setStreams([]);
               setStreamsFetched(false);
+              setMetadataProviders([]);
+              setActiveMetadataKey("");
             }}
             className="btn-ghost mb-4 text-xs"
           >
@@ -544,7 +727,7 @@ export function Search({
             <div className="flex-1">
               <h3 className="text-lg font-semibold">
                 {selected.title}{" "}
-                {selected.anime_native && (
+                {isAnimeTitle(selected) && (
                   <span className="chip bg-violet-500/15 text-violet-300">AIOStreams</span>
                 )}{" "}
                 <span className="text-slate-500">{selected.year}</span>
@@ -580,6 +763,26 @@ export function Search({
           {/* Series season/episode picker */}
           {selected.type === "series" && (
             <div className="mb-4 space-y-4">
+              {metadataProviders.length > 1 && (
+                <label className="block text-xs text-slate-400">
+                  Metadata provider
+                  <select
+                    className="input mt-1 w-full max-w-md"
+                    value={activeMetadataKey}
+                    onChange={(e) => {
+                      if (!selected) return;
+                      void applyMetadataProvider(selected, e.target.value, metadataProviders);
+                    }}
+                  >
+                    {metadataProviders.map((p) => (
+                      <option key={p.key} value={p.key}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
               <label className="text-xs text-slate-400">
                 Season
                 <select
@@ -588,18 +791,18 @@ export function Search({
                   onChange={(e) => {
                     const n = Number(e.target.value);
                     if (n) onSeasonChange(n);
-                    else {
-                      setSeason(undefined);
-                      setEpisodes([]);
-                    }
                   }}
+                  disabled={seasons.length === 0}
                 >
-                  <option value="">—</option>
-                  {seasons.map((s) => (
-                    <option key={s.season_number} value={s.season_number}>
-                      {s.name} ({s.episode_count} eps)
-                    </option>
-                  ))}
+                  {seasons.length === 0 ? (
+                    <option value="">Loading seasons…</option>
+                  ) : (
+                    seasons.map((s) => (
+                      <option key={s.season_number} value={s.season_number}>
+                        {seasonOptionLabel(s)}
+                      </option>
+                    ))
+                  )}
                 </select>
               </label>
 

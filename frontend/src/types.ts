@@ -37,6 +37,7 @@ export interface LibraryItem {
   episode_title?: string;
   stremio_id?: string | null;
   linked?: boolean;
+  on_watchlist?: boolean;
   playback_audio_index?: number | null;
   playback_subtitle_index?: number | null;
   playback_burn_subtitles?: boolean;
@@ -241,6 +242,7 @@ export interface UserInfo {
   id: number;
   username: string;
   role: "admin" | "member";
+  watchlist_stats_excluded?: boolean;
   created_at?: string;
 }
 
@@ -254,7 +256,7 @@ export interface WatchlistGroup {
   name: string;
   sort_order: number;
   wheel_enabled: boolean;
-  counts: { to_watch: number; watched: number };
+  counts: { to_watch: number; watched: number; needs_rating?: number };
 }
 
 export interface WatchlistWheelCandidate {
@@ -306,6 +308,9 @@ export interface WatchlistItem {
   sort_order: number;
   my_watched: boolean;
   my_rating: number | null;
+  my_watched_at?: string | null;
+  my_needs_rating?: boolean;
+  my_unrated_count?: number;
   user_watch: WatchlistUserWatch[];
   watched_by: { user_id: number; username: string }[];
   everyone_watched: boolean;
@@ -354,6 +359,30 @@ export interface StatsTitle {
   group_episode_progress?: string | null;
 }
 
+export interface StatsProfileTitle {
+  id: number;
+  title: string;
+  poster: string;
+  year: string;
+  kind: string;
+  user_watched: boolean;
+  user_rating: number | null;
+  user_watched_at: string | null;
+  user_commented: boolean;
+  user_needs_rating: boolean;
+}
+
+export interface StatsUserProfile {
+  user_id: number;
+  username: string;
+  watched_count: number;
+  ratings_given: number;
+  avg_rating: number | null;
+  comments_given: number;
+  needs_rating_count: number;
+  titles: StatsProfileTitle[];
+}
+
 export interface StatsUserRow {
   user_id: number;
   username: string;
@@ -365,6 +394,8 @@ export interface StatsUserRow {
 export interface StatsSummary {
   group_id: number | null;
   group_name: string;
+  users: { user_id: number; username: string }[];
+  selected_user_ids: number[] | null;
   overview: {
     total_titles: number;
     watched_by_anyone: number;
@@ -381,4 +412,5 @@ export interface StatsSummary {
   recently_watched: StatsTitle[];
   most_commented: StatsTitle[];
   user_leaderboard: StatsUserRow[];
+  profile: StatsUserProfile | null;
 }

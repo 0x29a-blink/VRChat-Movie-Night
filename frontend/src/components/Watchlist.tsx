@@ -25,9 +25,12 @@ import {
   Plus,
   RotateCw,
   Star,
+  Search,
   Trash2,
+  UserMinus,
+  X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
 import type { TmdbEpisode, UserInfo, WatchlistGroup, WatchlistItem, WatchlistUserWatch } from "../types";
@@ -98,6 +101,80 @@ function stopDrag(e: React.PointerEvent | React.MouseEvent) {
   e.stopPropagation();
 }
 
+type WatchedSort = "needs_rating" | "recent" | "oldest" | "title";
+
+function watchedSortLabel(sort: WatchedSort) {
+  switch (sort) {
+    case "needs_rating":
+      return "Needs rating first";
+    case "recent":
+      return "Most recently watched";
+    case "oldest":
+      return "Oldest watched";
+    case "title":
+      return "Title A–Z";
+  }
+}
+
+function compareWatchedAt(a: WatchlistItem, b: WatchlistItem) {
+  const ta = a.my_watched_at ? Date.parse(a.my_watched_at) : 0;
+  const tb = b.my_watched_at ? Date.parse(b.my_watched_at) : 0;
+  return tb - ta;
+}
+
+function sortWatchedItems(items: WatchlistItem[], sort: WatchedSort) {
+  const copy = [...items];
+  copy.sort((a, b) => {
+    if (sort === "needs_rating") {
+      const diff = (b.my_unrated_count ?? 0) - (a.my_unrated_count ?? 0);
+      if (diff !== 0) return diff;
+      return compareWatchedAt(a, b);
+    }
+    if (sort === "recent") return compareWatchedAt(a, b);
+    if (sort === "oldest") return compareWatchedAt(b, a);
+    if (sort === "title") return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+    return a.sort_order - b.sort_order;
+  });
+  return copy;
+}
+
+function NeedsRatingBadge({ count, className = "" }: { count: number; className?: string }) {
+  if (count <= 0) return null;
+  return (
+    <span
+      className={`inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-amber-400/55 px-0.5 text-[9px] font-bold leading-none text-ink-900 ${className}`}
+      title={`${count} watched item${count === 1 ? "" : "s"} not rated yet`}
+    >
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+function WatchedCountWithBadge({
+  watched,
+  needsRating,
+  className = "",
+}: {
+  watched: number;
+  needsRating: number;
+  className?: string;
+}) {
+  const count = needsRating > 0 ? (needsRating > 99 ? "99+" : String(needsRating)) : null;
+  return (
+    <span className={`relative inline-block tabular-nums ${className}`}>
+      {watched}
+      {count && (
+        <span
+          className="absolute -right-2 -top-1 flex h-2.5 min-w-2.5 items-center justify-center rounded-[3px] bg-amber-400/50 px-px text-[7px] font-bold leading-none text-ink-900"
+          title={`${needsRating} not rated yet`}
+        >
+          {count}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function GroupMoveSelect({
   item,
   groups,
@@ -115,7 +192,7 @@ function GroupMoveSelect({
   };
 
   return (
-    <label className="flex items-center gap-1 text-[11px] text-slate-400" onPointerDown={stopDrag}>
+    <label className="flex shrink-0 items-center gap-1 text-[11px] text-slate-400" onPointerDown={stopDrag}>
       <span className="shrink-0">Group</span>
       <select
         value={current}
@@ -183,6 +260,132 @@ function UserWatchBadges({
         );
       })}
     </div>
+  );
+}
+
+function StatsExclusionMenu({
+  item,
+  onUpdate,
+}: {
+  item: WatchlistItem;
+  onUpdate: (item: WatchlistItem) => void;
+}) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const [users, setUsers] = useState<
+    { user_id: number; username: string; globally_excluded: boolean; excluded_on_item: boolean }[]
+  >([]);
+  const [loading, setLoading] = useState(false);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const loadUsers = useCallback(() => {
+    setLoading(true);
+    api
+      .watchlistItemStatsExclusions(item.id)
+      .then((r) => setUsers(r.users))
+      .finally(() => setLoading(false));
+  }, [item.id]);
+
+  useEffect(() => {
+    if (open) loadUsers();
+  }, [open, loadUsers]);
+
+  useEffect(() => {
+    if (!open || !buttonRef.current) return;
+
+    const updatePosition = () => {
+      const rect = buttonRef.current!.getBoundingClientRect();
+      const panelWidth = 288;
+      const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8));
+      setMenuPos({ top: rect.bottom + 6, left });
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open]);
+
+  const toggle = async (userId: number, excluded: boolean) => {
+    setBusyId(userId);
+    try {
+      const next = await api.watchlistSetItemStatsExclusion(item.id, userId, excluded);
+      onUpdate(next);
+      loadUsers();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        onPointerDown={stopDrag}
+        className="btn-ghost shrink-0 px-1 py-0.5 text-slate-400"
+        title="Hide users from group stats on this title"
+      >
+        <UserMinus className="h-3 w-3" />
+      </button>
+      {open &&
+        menuPos &&
+        createPortal(
+          <>
+            <button
+              type="button"
+              className="fixed inset-0 z-[100]"
+              aria-label="Close menu"
+              onClick={() => setOpen(false)}
+            />
+            <div
+              className="fixed z-[101] w-72 max-w-[calc(100vw-1rem)] rounded-lg border border-white/10 bg-ink-900 p-3 shadow-xl"
+              style={{ top: menuPos.top, left: menuPos.left }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-2 text-xs font-medium text-slate-200">Group stats visibility</div>
+              <p className="mb-2 text-[10px] leading-snug text-slate-500">
+                Hidden users are omitted from watched counts and ratings here. They reappear if they rate, comment, or
+                mark watched.
+              </p>
+              {loading ? (
+                <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+              ) : (
+                <ul className="max-h-48 space-y-1 overflow-y-auto">
+                  {users.map((u) => {
+                    const excluded = u.globally_excluded || u.excluded_on_item;
+                    return (
+                      <li key={u.user_id} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="truncate text-slate-300">
+                          {u.username}
+                          {u.globally_excluded && (
+                            <span className="ml-1 text-[10px] text-amber-400">global</span>
+                          )}
+                        </span>
+                        <label className="flex shrink-0 items-center gap-1 text-slate-400">
+                          <input
+                            type="checkbox"
+                            checked={excluded}
+                            disabled={u.globally_excluded || busyId === u.user_id}
+                            onChange={(e) => toggle(u.user_id, e.target.checked)}
+                          />
+                          hide
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </>,
+          document.body
+        )}
+    </>
   );
 }
 
@@ -289,8 +492,8 @@ function ItemComments({ itemId, commentCount = 0 }: { itemId: number; commentCou
   };
 
   return (
-    <div className="min-w-0 flex-1">
-      <button type="button" onClick={() => setOpen(!open)} className="btn-ghost px-1 py-0.5 text-[11px]">
+    <div className={open ? "w-full basis-full" : "shrink-0"}>
+      <button type="button" onClick={() => setOpen(!open)} className="btn-ghost shrink-0 px-1 py-0.5 text-[11px]">
         <MessageSquare className="h-3 w-3" /> Comments{commentCount > 0 ? ` (${commentCount})` : ""}
       </button>
       {open && (
@@ -809,6 +1012,7 @@ function SortableRow({
   item,
   groups,
   currentUserId,
+  isAdmin,
   onUpdate,
   onRequestDelete,
   onRemoveFromView,
@@ -821,6 +1025,7 @@ function SortableRow({
   item: WatchlistItem;
   groups: WatchlistGroup[];
   currentUserId: number;
+  isAdmin: boolean;
   onUpdate: (item: WatchlistItem) => void;
   onRequestDelete: (item: WatchlistItem) => void;
   onRemoveFromView: (id: number) => void;
@@ -873,9 +1078,12 @@ function SortableRow({
               </button>
             )}
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">
-                {item.title}
-                {item.year && <span className="text-slate-500"> ({item.year})</span>}
+              <div className="flex items-center gap-2 truncate text-sm font-medium">
+                <span className="truncate">
+                  {item.title}
+                  {item.year && <span className="text-slate-500"> ({item.year})</span>}
+                </span>
+                <NeedsRatingBadge count={item.my_unrated_count ?? 0} className="shrink-0" />
               </div>
               <div className="mt-0.5 flex flex-wrap gap-1">
                 <span className="chip bg-white/5 text-slate-400">{item.kind}</span>
@@ -905,33 +1113,45 @@ function SortableRow({
               {item.kind === "movie" || item.kind === "collection" ? <ItemOverview item={item} /> : null}
             </div>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            {item.kind !== "episode" && (
-              <StarPicker value={item.my_rating} onChange={setRating} ratings={item.ratings ?? []} />
-            )}
-            <TitleMediaActions
-              libraryMatch={item.library_match}
-              onFindStreams={
-                streamTarget && item.kind !== "episode" && item.kind !== "collection"
-                  ? () => onFindStreams(streamTarget)
-                  : undefined
-              }
-              onPointerDown={stopDrag}
-            />
-            <ItemComments itemId={item.id} commentCount={item.comment_count} />
-            {item.kind !== "episode" && (
-              <GroupMoveSelect
-                item={item}
-                groups={groups}
-                onMoved={() => {
-                  onRemoveFromView(item.id);
-                  onRefresh();
-                }}
+          <div className="mt-2 space-y-2">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+              {item.kind !== "episode" && (
+                <StarPicker value={item.my_rating} onChange={setRating} ratings={item.ratings ?? []} />
+              )}
+              <TitleMediaActions
+                libraryMatch={item.library_match}
+                hideLibraryChip
+                onFindStreams={
+                  streamTarget && item.kind !== "episode" && item.kind !== "collection"
+                    ? () => onFindStreams(streamTarget)
+                    : undefined
+                }
+                onPointerDown={stopDrag}
               />
-            )}
-            <button type="button" onClick={() => onRequestDelete(item)} className="btn-ghost px-1 py-0.5 text-red-400">
-              <Trash2 className="h-3 w-3" />
-            </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+              <ItemComments itemId={item.id} commentCount={item.comment_count} />
+              {isAdmin && item.kind !== "episode" && (
+                <StatsExclusionMenu item={item} onUpdate={onUpdate} />
+              )}
+              {item.kind !== "episode" && (
+                <GroupMoveSelect
+                  item={item}
+                  groups={groups}
+                  onMoved={() => {
+                    onRemoveFromView(item.id);
+                    onRefresh();
+                  }}
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => onRequestDelete(item)}
+                className="btn-ghost shrink-0 px-1 py-0.5 text-red-400"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1009,6 +1229,7 @@ function EpisodeRow({
           <div className="min-w-0">
             <div className="text-xs font-medium">
               {item.episode}. {epTitle}
+              <NeedsRatingBadge count={item.my_unrated_count ?? 0} className="ml-1 align-middle" />
             </div>
             {airDate && <div className="text-[10px] text-slate-500">{airDate}</div>}
             {overview && <p className="mt-0.5 line-clamp-2 text-[10px] leading-snug text-slate-400">{overview}</p>}
@@ -1059,7 +1280,7 @@ export function Watchlist({
   const { push: pushToast } = useToast();
   const { obs } = usePlayback();
   const [groups, setGroups] = useState<WatchlistGroup[]>([]);
-  const [ungroupedCounts, setUngroupedCounts] = useState({ to_watch: 0, watched: 0 });
+  const [ungroupedCounts, setUngroupedCounts] = useState({ to_watch: 0, watched: 0, needs_rating: 0 });
   const [selectedGroupId, setSelectedGroupId] = useState<number>(initialGroupId ?? 0);
   const [groupQueueBusy, setGroupQueueBusy] = useState(false);
   const [section, setSection] = useState<"to_watch" | "watched">("to_watch");
@@ -1072,19 +1293,47 @@ export function Watchlist({
   const [wheelOpen, setWheelOpen] = useState(false);
   const [streamTarget, setStreamTarget] = useState<StreamTarget | null>(null);
   const [error, setError] = useState("");
+  const [itemFilter, setItemFilter] = useState("");
+  const [watchedSort, setWatchedSort] = useState<WatchedSort>("needs_rating");
 
-  const applyCounts = useCallback((groupId: number, counts: { to_watch: number; watched: number }) => {
-    if (groupId === 0) {
-      setUngroupedCounts(counts);
-    } else {
-      setGroups((prev) => prev.map((g) => (g.id === groupId ? { ...g, counts } : g)));
+  const filteredItems = useMemo(() => {
+    const q = itemFilter.trim().toLowerCase();
+    let list = q
+      ? items.filter((item) => {
+          const haystack = [item.title, item.year].filter(Boolean).join(" ").toLowerCase();
+          return haystack.includes(q);
+        })
+      : items;
+    if (section === "watched") {
+      list = sortWatchedItems(list, watchedSort);
     }
-  }, []);
+    return list;
+  }, [items, itemFilter, section, watchedSort]);
+
+  const applyCounts = useCallback(
+    (groupId: number, counts: { to_watch: number; watched: number; needs_rating?: number }) => {
+      const normalized = {
+        to_watch: counts.to_watch,
+        watched: counts.watched,
+        needs_rating: counts.needs_rating ?? 0,
+      };
+      if (groupId === 0) {
+        setUngroupedCounts(normalized);
+      } else {
+        setGroups((prev) => prev.map((g) => (g.id === groupId ? { ...g, counts: normalized } : g)));
+      }
+    },
+    []
+  );
 
   const loadGroups = useCallback(() => {
     api.watchlistGroups().then((r) => {
       setGroups(r.groups);
-      setUngroupedCounts(r.ungrouped_counts);
+      setUngroupedCounts({
+        to_watch: r.ungrouped_counts.to_watch,
+        watched: r.ungrouped_counts.watched,
+        needs_rating: r.ungrouped_counts.needs_rating ?? 0,
+      });
     });
   }, []);
 
@@ -1110,8 +1359,13 @@ export function Watchlist({
 
   const pickGroup = (id: number) => {
     setSelectedGroupId(id);
+    setItemFilter("");
     onGroupChange?.(id);
   };
+
+  useEffect(() => {
+    setItemFilter("");
+  }, [section, selectedGroupId]);
 
   useEffect(() => {
     loadItems();
@@ -1240,7 +1494,7 @@ export function Watchlist({
   const selectedGroup = groups.find((g) => g.id === selectedGroupId);
   const wheelGroupName = selectedGroupId === 0 ? "Ungrouped" : selectedGroup?.name ?? "Group";
   const counts =
-    selectedGroupId === 0 ? ungroupedCounts : selectedGroup?.counts ?? { to_watch: 0, watched: 0 };
+    selectedGroupId === 0 ? ungroupedCounts : selectedGroup?.counts ?? { to_watch: 0, watched: 0, needs_rating: 0 };
 
   return (
     <div className="space-y-4">
@@ -1271,7 +1525,11 @@ export function Watchlist({
           >
             Ungrouped
             <span className="ml-2 text-[10px] text-slate-500 lg:float-right">
-              {ungroupedCounts.to_watch} · {ungroupedCounts.watched}
+              {ungroupedCounts.to_watch} ·{" "}
+              <WatchedCountWithBadge
+                watched={ungroupedCounts.watched}
+                needsRating={ungroupedCounts.needs_rating}
+              />
             </span>
           </button>
           {groups.map((g) => (
@@ -1285,7 +1543,11 @@ export function Watchlist({
             >
               {g.name}
               <span className="ml-2 text-[10px] text-slate-500 lg:float-right">
-                {g.counts.to_watch} · {g.counts.watched}
+                {g.counts.to_watch} ·{" "}
+                <WatchedCountWithBadge
+                  watched={g.counts.watched}
+                  needsRating={g.counts.needs_rating ?? 0}
+                />
               </span>
             </button>
           ))}
@@ -1318,7 +1580,10 @@ export function Watchlist({
               onClick={() => setSection("watched")}
               className={section === "watched" ? "btn-primary" : "btn-ghost"}
             >
-              Watched ({counts.watched})
+              <span className="inline-flex items-center gap-1.5">
+                Watched (
+                <WatchedCountWithBadge watched={counts.watched} needsRating={counts.needs_rating ?? 0} />)
+              </span>
             </button>
             {(selectedGroupId === 0 || selectedGroup?.wheel_enabled !== false) && section === "to_watch" && (
               <button type="button" onClick={spinWheel} className="btn-ghost ml-auto">
@@ -1326,6 +1591,54 @@ export function Watchlist({
               </button>
             )}
           </div>
+
+          <div className="space-y-1">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+              <input
+                value={itemFilter}
+                onChange={(e) => setItemFilter(e.target.value)}
+                placeholder="Filter titles in this group…"
+                className="input w-full pl-10 text-sm"
+              />
+              {itemFilter && (
+                <button
+                  type="button"
+                  onClick={() => setItemFilter("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-white/5 hover:text-white"
+                  title="Clear filter"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            {itemFilter.trim() && (
+              <p className="text-xs text-slate-500">
+                Showing {filteredItems.length} of {items.length}
+              </p>
+            )}
+          </div>
+
+          {section === "watched" && (
+            <label className="flex w-full flex-wrap items-center gap-2 text-xs text-slate-400 sm:w-auto">
+              <span className="shrink-0">Sort</span>
+              <select
+                className="input max-w-full py-1 text-xs sm:max-w-[14rem]"
+                value={watchedSort}
+                onChange={(e) => setWatchedSort(e.target.value as WatchedSort)}
+              >
+                <option value="needs_rating">{watchedSortLabel("needs_rating")}</option>
+                <option value="recent">{watchedSortLabel("recent")}</option>
+                <option value="oldest">{watchedSortLabel("oldest")}</option>
+                <option value="title">{watchedSortLabel("title")}</option>
+              </select>
+              {(counts.needs_rating ?? 0) > 0 && (
+                <span className="text-amber-300/90">
+                  {counts.needs_rating} not rated yet
+                </span>
+              )}
+            </label>
+          )}
 
           {section === "to_watch" && (
             <div className="flex flex-wrap gap-2">
@@ -1366,16 +1679,21 @@ export function Watchlist({
             <div className="py-12 text-center text-sm text-slate-500">
               Nothing here yet. Add titles from Search or Browse.
             </div>
+          ) : filteredItems.length === 0 ? (
+            <div className="py-12 text-center text-sm text-slate-500">
+              No titles match &ldquo;{itemFilter.trim()}&rdquo;.
+            </div>
           ) : (
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-              <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+              <SortableContext items={filteredItems.map((i) => i.id)} strategy={verticalListSortingStrategy}>
                 <div className="space-y-2">
-                  {items.map((item) => (
+                  {filteredItems.map((item) => (
                     <SortableRow
                       key={item.id}
                       item={item}
                       groups={groups}
                       currentUserId={user.id}
+                      isAdmin={user.role === "admin"}
                       onUpdate={updateItem}
                       onRequestDelete={requestDelete}
                       onRemoveFromView={removeFromView}
