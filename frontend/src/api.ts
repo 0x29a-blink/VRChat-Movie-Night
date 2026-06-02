@@ -44,6 +44,8 @@ export const api = {
   deleteUser: (id: number) => del(`/api/users/${id}`),
   resetUserPassword: (id: number, password: string) =>
     post<{ ok: boolean; password: string }>(`/api/users/${id}/reset-password`, { password }),
+  setUserWatchlistStatsExcluded: (id: number, excluded: boolean) =>
+    put<{ user: import("./types").UserInfo }>(`/api/users/${id}/watchlist-stats-excluded`, { excluded }),
 
   // downloads
   listDownloads: () => get<import("./types").Job[]>("/api/downloads"),
@@ -242,7 +244,7 @@ export const api = {
 
   // watchlist
   watchlistGroups: () =>
-    get<{ groups: import("./types").WatchlistGroup[]; ungrouped_counts: { to_watch: number; watched: number } }>(
+    get<{ groups: import("./types").WatchlistGroup[]; ungrouped_counts: { to_watch: number; watched: number; needs_rating?: number } }>(
       "/api/watchlist/groups"
     ),
   watchlistCreateGroup: (name: string) =>
@@ -253,7 +255,7 @@ export const api = {
   watchlistGroupItems: (groupId: number, section?: string) => {
     let url = `/api/watchlist/groups/${groupId}/items`;
     if (section) url += `?section=${section}`;
-    return get<{ items: import("./types").WatchlistItem[]; counts: { to_watch: number; watched: number } }>(url);
+    return get<{ items: import("./types").WatchlistItem[]; counts: { to_watch: number; watched: number; needs_rating?: number } }>(url);
   },
   watchlistAddItem: (payload: {
     kind: string;
@@ -341,12 +343,25 @@ export const api = {
     post<{ added: number; skipped: number; eligible: number }>(`/api/watchlist/groups/${groupId}/queue-unwatched`),
   watchlistPlayNextUnwatched: (groupId: number) =>
     post<{ title: string; library_id: number }>(`/api/watchlist/groups/${groupId}/play-next-unwatched`),
+  watchlistItemStatsExclusions: (itemId: number) =>
+    get<{
+      users: {
+        user_id: number;
+        username: string;
+        globally_excluded: boolean;
+        excluded_on_item: boolean;
+      }[];
+    }>(`/api/watchlist/items/${itemId}/stats-exclusions`),
+  watchlistSetItemStatsExclusion: (itemId: number, userId: number, excluded: boolean) =>
+    put<import("./types").WatchlistItem>(`/api/watchlist/items/${itemId}/stats-exclusions/${userId}`, { excluded }),
 
   // stats
-  getStats: (groupId?: number | null) => {
-    let url = "/api/stats";
-    if (groupId != null) url += `?group_id=${groupId}`;
-    return get<import("./types").StatsSummary>(url);
+  getStats: (groupId?: number | null, userIds?: number[]) => {
+    const params = new URLSearchParams();
+    if (groupId != null) params.set("group_id", String(groupId));
+    if (userIds && userIds.length > 0) params.set("user_ids", userIds.join(","));
+    const q = params.toString();
+    return get<import("./types").StatsSummary>(q ? `/api/stats?${q}` : "/api/stats");
   },
 
   exportBackup: async () => {

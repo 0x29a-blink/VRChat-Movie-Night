@@ -97,3 +97,47 @@ def find_library_for_watchlist_item(db: Session, item: WatchlistItem) -> dict | 
         if cand == target or (len(target) > 4 and (target in cand or cand in target)):
             return lib.to_dict()
     return None
+
+
+def library_item_on_watchlist(db: Session, lib: LibraryItem) -> bool:
+    if not lib.tmdb_id and not (lib.stremio_id or "").strip():
+        return False
+
+    if db.query(WatchlistItem).filter(WatchlistItem.library_item_id == lib.id).first():
+        return True
+
+    sid = (lib.stremio_id or "").strip()
+
+    if lib.media_type == "movie" and lib.tmdb_id:
+        return (
+            db.query(WatchlistItem)
+            .filter(WatchlistItem.kind == "movie", WatchlistItem.tmdb_id == lib.tmdb_id)
+            .first()
+            is not None
+        )
+
+    if lib.media_type == "series":
+        if lib.season is not None and lib.episode is not None:
+            q = db.query(WatchlistItem).filter(
+                WatchlistItem.kind == "episode",
+                WatchlistItem.season == lib.season,
+                WatchlistItem.episode == lib.episode,
+            )
+            if lib.tmdb_id:
+                q = q.filter(WatchlistItem.tmdb_id == lib.tmdb_id)
+            elif sid:
+                q = q.filter(WatchlistItem.stremio_id == sid)
+            else:
+                return False
+            return q.first() is not None
+
+        q = db.query(WatchlistItem).filter(WatchlistItem.kind == "series")
+        if lib.tmdb_id:
+            q = q.filter(WatchlistItem.tmdb_id == lib.tmdb_id)
+        elif sid:
+            q = q.filter(WatchlistItem.stremio_id == sid)
+        else:
+            return False
+        return q.first() is not None
+
+    return False

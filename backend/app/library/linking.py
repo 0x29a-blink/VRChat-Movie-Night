@@ -87,6 +87,7 @@ async def apply_tmdb_link(
 
     lib.tmdb_id = tmdb_id
     lib.media_type = media_type
+    lib.stremio_id = ""
     lib.tmdb_title = info.get("title") or ""
     lib.tmdb_year = info.get("year") or ""
     lib.tmdb_poster = info.get("poster") or ""

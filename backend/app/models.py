@@ -158,6 +158,8 @@ class User(Base):
     username: Mapped[str] = mapped_column(String, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String)
     role: Mapped[str] = mapped_column(String, default="member")  # admin | member
+    watchlist_stats_excluded: Mapped[bool] = mapped_column(Boolean, default=False)
+    watchlist_stats_excluded_at = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     def to_dict(self) -> dict:
@@ -165,8 +167,19 @@ class User(Base):
             "id": self.id,
             "username": self.username,
             "role": self.role,
+            "watchlist_stats_excluded": bool(self.watchlist_stats_excluded),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+class WatchlistItemUserExclusion(Base):
+    __tablename__ = "watchlist_item_user_exclusions"
+    __table_args__ = (UniqueConstraint("item_id", "user_id", name="uq_watchlist_item_user_exclusion"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    item_id: Mapped[int] = mapped_column(Integer, ForeignKey("watchlist_items.id"), index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
 class WatchlistGroup(Base):
@@ -228,6 +241,7 @@ class UserRating(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), index=True)
     item_id: Mapped[int] = mapped_column(Integer, ForeignKey("watchlist_items.id"), index=True)
     stars: Mapped[float] = mapped_column(Float, default=0)
+    rated_at = mapped_column(DateTime, nullable=True)
 
 
 class WatchlistComment(Base):

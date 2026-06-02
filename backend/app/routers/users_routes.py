@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -17,6 +19,10 @@ class UserCreate(BaseModel):
 
 class ResetPasswordBody(BaseModel):
     password: str = Field(min_length=1)
+
+
+class WatchlistStatsExcludedBody(BaseModel):
+    excluded: bool
 
 
 @router.get("")
@@ -65,3 +71,19 @@ def reset_password(user_id: int, body: ResetPasswordBody, db: Session = Depends(
     user.password_hash = auth.hash_password(body.password)
     db.commit()
     return {"ok": True, "password": body.password}
+
+
+@router.put("/{user_id}/watchlist-stats-excluded")
+def set_watchlist_stats_excluded(
+    user_id: int,
+    body: WatchlistStatsExcludedBody,
+    db: Session = Depends(get_db),
+):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    user.watchlist_stats_excluded = body.excluded
+    user.watchlist_stats_excluded_at = datetime.now(timezone.utc) if body.excluded else None
+    db.commit()
+    db.refresh(user)
+    return {"user": user.to_dict()}

@@ -67,6 +67,7 @@ def _catalog_path(type_: str, catalog_id: str, extras: dict[str, str] | None = N
 
 def _normalize_catalog_entry(entry: dict) -> dict:
     extras = entry.get("extra") or []
+    hidden = {"skip", "search"}
     return {
         "type": entry.get("type") or "movie",
         "id": entry.get("id") or "",
@@ -78,7 +79,7 @@ def _normalize_catalog_entry(entry: dict) -> dict:
                 "options": e.get("options") or [],
             }
             for e in extras
-            if e.get("name")
+            if e.get("name") and (e.get("name") or "").strip().lower() not in hidden
         ],
     }
 

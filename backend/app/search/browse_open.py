@@ -21,7 +21,10 @@ async def open_item(stremio_id: str, media_type: str) -> dict:
             return {"action": "title", "title": native}
         title = await _anime_title_fallback(sid)
         if title:
-            return {"action": "title", "title": await tmdb.resolve_by_name(title, "series")}
+            fallback = await tmdb.resolve_by_name(title, "series")
+            fallback["stremio_id"] = sid
+            fallback["anime_native"] = True
+            return {"action": "title", "title": fallback}
 
     # Meta with embedded episode list (some collection pages)
     if sid.startswith("ctmdb"):

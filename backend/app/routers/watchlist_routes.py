@@ -20,7 +20,15 @@ from ..models import (
     WatchlistComment,
     WatchlistGroup,
     WatchlistItem,
+    WatchlistItemUserExclusion,
     WheelPreset,
+)
+from ..watchlist.exclusions import (
+    ExclusionContext,
+    filter_ratings_for_item,
+    participation_scope_ids,
+    users_for_item_stats,
+    visible_comment_count,
 )
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"], dependencies=[Depends(auth.require_auth)])
@@ -98,7 +106,15 @@ def _enrich_item(
     user_id: int,
     all_users: list[User],
     children: list[dict] | None = None,
+    exclusion_ctx: ExclusionContext | None = None,
 ) -> dict:
+    if exclusion_ctx is None:
+        exclusion_ctx = ExclusionContext.load(db)
+    scope_ids = participation_scope_ids(db, item, children)
+    stats_users = users_for_item_stats(
+        exclusion_ctx, db, all_users, item, scope_ids, viewer_user_id=user_id
+    )
+
     out = _item_base(item)
     status = (
         db.query(UserWatchStatus)
@@ -111,11 +127,15 @@ def _enrich_item(
         .first()
     )
     out["my_watched"] = bool(status and status.watched)
-    out["my_rating"] = rating.stars if rating else None
+    out["my_rating"] = rating.stars if rating and rating.stars > 0 else None
+    out["my_watched_at"] = (
+        status.watched_at.isoformat() if status and status.watched_at else None
+    )
+    out["my_needs_rating"] = _needs_rating(out["my_watched"], out["my_rating"])
 
-    out["user_watch"] = _build_user_watch(db, item.id, all_users, children)
+    out["user_watch"] = _build_user_watch(db, item.id, stats_users, children)
     out["watched_by"] = [u for u in out["user_watch"] if u["watched"]]
-    out["everyone_watched"] = len(all_users) > 0 and all(u["watched"] for u in out["user_watch"])
+    out["everyone_watched"] = len(stats_users) > 0 and all(u["watched"] for u in out["user_watch"])
 
     ratings = (
         db.query(UserRating, User)
@@ -123,15 +143,8 @@ def _enrich_item(
         .filter(UserRating.item_id == item.id)
         .all()
     )
-    out["ratings"] = [
-        {"user_id": u.id, "username": u.username, "stars": r.stars} for r, u in ratings
-    ]
-    out["comment_count"] = (
-        db.query(func.count(WatchlistComment.id))
-        .filter(WatchlistComment.item_id == item.id)
-        .scalar()
-        or 0
-    )
+    out["ratings"] = filter_ratings_for_item(exclusion_ctx, db, item, scope_ids, ratings)
+    out["comment_count"] = visible_comment_count(exclusion_ctx, db, item, scope_ids)
     out["library_match"] = _find_library_match(db, item)
 
     if children is not None:
@@ -141,13 +154,25 @@ def _enrich_item(
             out["my_watched"] = True
         out["my_episode_progress"] = f"{watched_eps}/{len(children)}" if children else None
         group_watched = sum(1 for u in out["user_watch"] if u["watched"])
-        out["group_watch_progress"] = f"{group_watched}/{len(all_users)}" if all_users else None
+        out["group_watch_progress"] = f"{group_watched}/{len(stats_users)}" if stats_users else None
         ep_any = sum(
             1
             for c in children
             if any(uw.get("watched") for uw in c.get("user_watch", []))
         )
         out["group_episode_progress"] = f"{ep_any}/{len(children)}" if children else None
+
+    if children is not None:
+        out["my_unrated_count"] = _my_unrated_count_from_children(
+            db, user_id, item, enriched_children=children
+        )
+        latest = _my_latest_watched_at(db, user_id, item, enriched_children=children)
+    else:
+        out["my_unrated_count"] = _my_unrated_count_from_children(db, user_id, item)
+        latest = _my_latest_watched_at(db, user_id, item)
+    if latest:
+        out["my_watched_at"] = latest.isoformat()
+    out["my_needs_rating"] = out["my_unrated_count"] > 0
 
     return out
 
@@ -217,7 +242,7 @@ def _counts_for_roots(
     by_parent: dict[int, list[WatchlistItem]],
     nested_by_parent: dict[int, list[WatchlistItem]] | None = None,
 ) -> dict[str, int]:
-    counts = {"to_watch": 0, "watched": 0}
+    counts = {"to_watch": 0, "watched": 0, "needs_rating": 0}
     for item in roots:
         children = by_parent.get(item.id, []) if item.kind in _CONTAINER_KINDS else []
         nested = nested_by_parent
@@ -226,6 +251,13 @@ def _counts_for_roots(
             nested = _children_by_parent(db, series_ids) if series_ids else {}
         if _user_root_watched(db, user_id, item, children, nested):
             counts["watched"] += 1
+            counts["needs_rating"] += _my_unrated_count_from_children(
+                db,
+                user_id,
+                item,
+                children_raw=children,
+                nested_by_parent=nested,
+            )
         else:
             counts["to_watch"] += 1
     return counts
@@ -298,17 +330,23 @@ def _enrich_container_children(
     user_id: int,
     all_users: list[User],
     by_parent: dict[int, list[WatchlistItem]] | None = None,
+    exclusion_ctx: ExclusionContext | None = None,
 ) -> list[dict]:
+    if exclusion_ctx is None:
+        exclusion_ctx = ExclusionContext.load(db)
     series_ids = [c.id for c in children_raw if c.kind == "series"]
     by_episodes = by_parent if by_parent is not None else _children_by_parent(db, series_ids)
     out: list[dict] = []
     for child in children_raw:
         if child.kind == "series":
             eps_raw = by_episodes.get(child.id, [])
-            eps = [_enrich_item(db, e, user_id, all_users) for e in eps_raw]
-            out.append(_enrich_item(db, child, user_id, all_users, eps))
+            eps = [
+                _enrich_item(db, e, user_id, all_users, exclusion_ctx=exclusion_ctx)
+                for e in eps_raw
+            ]
+            out.append(_enrich_item(db, child, user_id, all_users, eps, exclusion_ctx=exclusion_ctx))
         else:
-            out.append(_enrich_item(db, child, user_id, all_users))
+            out.append(_enrich_item(db, child, user_id, all_users, exclusion_ctx=exclusion_ctx))
     return out
 
 
@@ -319,6 +357,140 @@ def _user_watched_item(db: Session, user_id: int, item_id: int) -> bool:
         .first()
     )
     return bool(row and row.watched)
+
+
+def _user_watched_at(db: Session, user_id: int, item_id: int) -> datetime | None:
+    row = (
+        db.query(UserWatchStatus)
+        .filter(UserWatchStatus.user_id == user_id, UserWatchStatus.item_id == item_id)
+        .first()
+    )
+    if row and row.watched and row.watched_at:
+        return row.watched_at
+    return None
+
+
+def _user_rating_stars(db: Session, user_id: int, item_id: int) -> float | None:
+    row = (
+        db.query(UserRating)
+        .filter(UserRating.user_id == user_id, UserRating.item_id == item_id)
+        .first()
+    )
+    if row and row.stars > 0:
+        return row.stars
+    return None
+
+
+def _needs_rating(watched: bool, stars: float | None) -> bool:
+    return watched and (stars is None or stars <= 0)
+
+
+def _leaf_unrated_count(db: Session, user_id: int, item_id: int) -> int:
+    if not _user_watched_item(db, user_id, item_id):
+        return 0
+    if _user_rating_stars(db, user_id, item_id) is not None:
+        return 0
+    return 1
+
+
+def _my_unrated_count_from_children(
+    db: Session,
+    user_id: int,
+    item: WatchlistItem,
+    enriched_children: list[dict] | None = None,
+    *,
+    children_raw: list[WatchlistItem] | None = None,
+    nested_by_parent: dict[int, list[WatchlistItem]] | None = None,
+) -> int:
+    if item.kind == "movie":
+        return _leaf_unrated_count(db, user_id, item.id)
+
+    if item.kind == "series":
+        total = 0
+        if enriched_children is not None:
+            total += sum(int(c.get("my_unrated_count") or 0) for c in enriched_children)
+        else:
+            for ep in children_raw or _series_children(db, item.id):
+                total += _leaf_unrated_count(db, user_id, ep.id)
+        if _needs_rating(
+            _user_watched_item(db, user_id, item.id),
+            _user_rating_stars(db, user_id, item.id),
+        ):
+            total += 1
+        return total
+
+    if item.kind == "collection":
+        total = 0
+        kids = enriched_children
+        if kids is None:
+            for child in children_raw or _direct_children(db, item.id):
+                if child.kind == "series":
+                    eps = (nested_by_parent or {}).get(child.id) or _series_children(db, child.id)
+                    total += _my_unrated_count_from_children(
+                        db, user_id, child, children_raw=eps
+                    )
+                else:
+                    total += _leaf_unrated_count(db, user_id, child.id)
+            return total
+        for child in kids:
+            total += int(child.get("my_unrated_count") or 0)
+        return total
+
+    if item.kind == "episode":
+        return _leaf_unrated_count(db, user_id, item.id)
+
+    return 0
+
+
+def _my_latest_watched_at(
+    db: Session,
+    user_id: int,
+    item: WatchlistItem,
+    enriched_children: list[dict] | None = None,
+    *,
+    children_raw: list[WatchlistItem] | None = None,
+    nested_by_parent: dict[int, list[WatchlistItem]] | None = None,
+) -> datetime | None:
+    times: list[datetime] = []
+
+    def _collect_item(item_id: int) -> None:
+        watched_at = _user_watched_at(db, user_id, item_id)
+        if watched_at:
+            times.append(watched_at)
+
+    if item.kind == "movie" or item.kind == "episode":
+        return _user_watched_at(db, user_id, item.id)
+
+    if item.kind == "series":
+        if enriched_children:
+            for child in enriched_children:
+                raw = child.get("my_watched_at")
+                if raw:
+                    times.append(datetime.fromisoformat(str(raw).replace("Z", "+00:00")))
+        else:
+            for ep in children_raw or _series_children(db, item.id):
+                _collect_item(ep.id)
+        _collect_item(item.id)
+        return max(times) if times else None
+
+    if item.kind == "collection":
+        if enriched_children:
+            for child in enriched_children:
+                raw = child.get("my_watched_at")
+                if raw:
+                    times.append(datetime.fromisoformat(str(raw).replace("Z", "+00:00")))
+        else:
+            for child in children_raw or _direct_children(db, item.id):
+                if child.kind == "series":
+                    eps = (nested_by_parent or {}).get(child.id) or _series_children(db, child.id)
+                    latest = _my_latest_watched_at(db, user_id, child, children_raw=eps)
+                    if latest:
+                        times.append(latest)
+                else:
+                    _collect_item(child.id)
+        return max(times) if times else None
+
+    return _user_watched_at(db, user_id, item.id)
 
 
 def _sync_series_from_episodes(db: Session, series_id: int) -> None:
@@ -556,6 +728,7 @@ def group_items(
         items = all_roots
 
     all_users = db.query(User).all()
+    exclusion_ctx = ExclusionContext.load(db)
     roots = items
 
     result = []
@@ -568,10 +741,11 @@ def group_items(
                 user.id,
                 all_users,
                 nested if root.kind == "collection" else None,
+                exclusion_ctx=exclusion_ctx,
             )
-            result.append(_enrich_item(db, root, user.id, all_users, children))
+            result.append(_enrich_item(db, root, user.id, all_users, children, exclusion_ctx=exclusion_ctx))
         else:
-            result.append(_enrich_item(db, root, user.id, all_users))
+            result.append(_enrich_item(db, root, user.id, all_users, exclusion_ctx=exclusion_ctx))
 
     return {"items": result, "counts": counts}
 
@@ -1297,6 +1471,7 @@ def set_rating(
         row = UserRating(user_id=user.id, item_id=item_id)
         db.add(row)
     row.stars = body.stars
+    row.rated_at = _now()
     db.commit()
     all_users = db.query(User).all()
     return _enrich_item(db, item, user.id, all_users)
@@ -1583,3 +1758,70 @@ async def play_next_unwatched_in_group(
     snap = await manager.add_library_item(lib_id)
     await manager.play_index(len(snap["items"]) - 1)
     return {"title": title, "library_id": lib_id}
+
+
+class ItemUserExclusionBody(BaseModel):
+    excluded: bool
+
+
+def _require_admin(user: auth.CurrentUser) -> None:
+    if user.role != "admin":
+        raise HTTPException(403, "Admin only")
+
+
+@router.get("/items/{item_id}/stats-exclusions")
+def list_item_stats_exclusions(
+    item_id: int,
+    db: Session = Depends(get_db),
+    user: auth.CurrentUser = Depends(auth.require_auth),
+):
+    _require_admin(user)
+    item = db.get(WatchlistItem, item_id)
+    if not item:
+        raise HTTPException(404, "Item not found")
+    ctx = ExclusionContext.load(db)
+    all_users = db.query(User).order_by(User.username).all()
+    return {
+        "users": [
+            {
+                "user_id": u.id,
+                "username": u.username,
+                "globally_excluded": u.id in ctx.global_excluded,
+                "excluded_on_item": (item_id, u.id) in ctx.item_exclusions,
+            }
+            for u in all_users
+        ]
+    }
+
+
+@router.put("/items/{item_id}/stats-exclusions/{target_user_id}")
+def set_item_stats_exclusion(
+    item_id: int,
+    target_user_id: int,
+    body: ItemUserExclusionBody,
+    db: Session = Depends(get_db),
+    user: auth.CurrentUser = Depends(auth.require_auth),
+):
+    _require_admin(user)
+    item = db.get(WatchlistItem, item_id)
+    if not item:
+        raise HTTPException(404, "Item not found")
+    target = db.get(User, target_user_id)
+    if not target:
+        raise HTTPException(404, "User not found")
+    row = (
+        db.query(WatchlistItemUserExclusion)
+        .filter(
+            WatchlistItemUserExclusion.item_id == item_id,
+            WatchlistItemUserExclusion.user_id == target_user_id,
+        )
+        .first()
+    )
+    if body.excluded:
+        if not row:
+            db.add(WatchlistItemUserExclusion(item_id=item_id, user_id=target_user_id))
+    elif row:
+        db.delete(row)
+    db.commit()
+    all_users = db.query(User).all()
+    return _enrich_item(db, item, user.id, all_users)

@@ -66,9 +66,28 @@ function UsersAdmin() {
     }
   };
 
+  const toggleStatsExcluded = async (u: UserInfo) => {
+    setBusy(true);
+    try {
+      await api.setUserWatchlistStatsExcluded(u.id, !u.watchlist_stats_excluded);
+      load();
+      pushToast(
+        u.watchlist_stats_excluded
+          ? `${u.username} included in group watchlist stats`
+          : `${u.username} excluded from group watchlist stats`,
+        "info",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Section title="Users (admin)">
-      <p className="text-xs text-slate-500">Create accounts for your friend group. Password is shown once after create/reset.</p>
+      <p className="text-xs text-slate-500">
+        Create accounts for your friend group. Password is shown once after create/reset. Exclude inactive friends from
+        group watched counts and ratings; they still reappear on a title if they rate, comment, or mark it watched.
+      </p>
       {loading ? (
         <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
       ) : (
@@ -76,9 +95,21 @@ function UsersAdmin() {
           {users.map((u) => (
             <li key={u.id} className="flex items-center justify-between rounded-lg bg-black/20 px-3 py-2 text-sm">
               <span>
-                {u.username} <span className="chip ml-1 bg-white/5 text-slate-400">{u.role}</span>
+                {u.username}{" "}
+                <span className="chip ml-1 bg-white/5 text-slate-400">{u.role}</span>
+                {u.watchlist_stats_excluded && (
+                  <span className="chip ml-1 bg-amber-500/15 text-amber-300">stats excluded</span>
+                )}
               </span>
               <span className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => toggleStatsExcluded(u)}
+                  className="btn-ghost px-2 text-xs"
+                >
+                  {u.watchlist_stats_excluded ? "Include in stats" : "Exclude from stats"}
+                </button>
                 <button type="button" onClick={() => { setResetTarget(u); setResetPw(""); }} className="btn-ghost px-2 text-xs">
                   Reset password
                 </button>

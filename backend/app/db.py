@@ -71,6 +71,22 @@ def _migrate_schema() -> None:
                 if name not in job_cols:
                     conn.execute(text(f"ALTER TABLE jobs ADD COLUMN {name} {col_type}"))
 
+    if insp.has_table("users"):
+        user_cols = {c["name"] for c in insp.get_columns("users")}
+        with engine.begin() as conn:
+            if "watchlist_stats_excluded" not in user_cols:
+                conn.execute(
+                    text("ALTER TABLE users ADD COLUMN watchlist_stats_excluded BOOLEAN DEFAULT 0")
+                )
+            if "watchlist_stats_excluded_at" not in user_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN watchlist_stats_excluded_at DATETIME"))
+
+    if insp.has_table("user_ratings"):
+        rating_cols = {c["name"] for c in insp.get_columns("user_ratings")}
+        with engine.begin() as conn:
+            if "rated_at" not in rating_cols:
+                conn.execute(text("ALTER TABLE user_ratings ADD COLUMN rated_at DATETIME"))
+
 
 def init_db() -> None:
     from . import models  # noqa: F401
