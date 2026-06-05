@@ -337,30 +337,21 @@ hlsAllowOrigins: ['*']
 # If the server receives a request from one of these entries, IP in logs
 # will be taken from the X-Forwarded-For header.
 hlsTrustedProxies: []
-# By default, HLS is generated only when requested by a user.
-# This option allows to generate it always, avoiding the delay between request and generation.
-hlsAlwaysRemux: false
+# Generate HLS as soon as RTMP publishes (avoids first-viewer spin-up delay).
+hlsAlwaysRemux: true
 # Variant of the HLS protocol to use. Available options are:
-# * mpegts - uses MPEG-TS segments, for maximum compatibility.
-# * fmp4 - uses fragmented MP4 segments, more efficient.
-# * lowLatency - uses Low-Latency HLS.
+# * mpegts - best VRChat compatibility (PC + Quest); use with short segment duration.
+# * fmp4 / lowLatency - lower server latency but VRChat PC often breaks (no audio / black).
+# See MediaMTX/LATENCY.md before switching away from mpegts.
 hlsVariant: mpegts
-# Number of HLS segments to keep on the server.
-# Segments allow to seek through the stream.
-# Their number doesn't influence latency.
-hlsSegmentCount: 7
-# Minimum duration of each segment.
-# A player usually puts 3 segments in a buffer before reproducing the stream.
-# The final segment duration is also influenced by the interval between IDR frames,
-# since the server changes the duration in order to include at least one IDR frame
-# in each segment.
-hlsSegmentDuration: 4s
-# Minimum duration of each part.
-# A player usually puts 3 parts in a buffer before reproducing the stream.
-# Parts are used in Low-Latency HLS in place of segments.
-# Part duration is influenced by the distance between video/audio samples
-# and is adjusted in order to produce segments with a similar duration.
-hlsPartDuration: 1s
+# Segments kept on disk (DVR window). Does not add much latency; smaller = less rewind buffer.
+hlsSegmentCount: 4
+# Segment length — main latency knob for mpegts HLS. Players often buffer ~3 segments.
+# Was 4s (~12s+ behind live). 1s targets ~3–5s from MediaMTX before OBS/VRChat buffer.
+# Match OBS keyframe interval ~2s (encoder settings / stream presets).
+hlsSegmentDuration: 1s
+# Used when hlsVariant is lowLatency (LL-HLS). Ignored for mpegts.
+hlsPartDuration: 200ms
 # Maximum size of each segment.
 # This prevents RAM exhaustion.
 hlsSegmentMaxSize: 50M

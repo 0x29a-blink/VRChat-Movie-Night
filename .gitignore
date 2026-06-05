@@ -29,6 +29,13 @@ library/torrents/*
 MediaMTX/mediamtx.log
 MediaMTX/mediamtx.exe
 
+# Bundled CLI tools (run scripts/fetch-tools.ps1 locally — do not commit)
+tools/*.exe
+tools/*.dll
+
+# Stack runtime (PIDs written by run_stack.py)
+.stack/
+
 # AIOStreams self-hosted instance (clone + runtime data — do not commit)
 AIOStreams/repo/
 AIOStreams/.env

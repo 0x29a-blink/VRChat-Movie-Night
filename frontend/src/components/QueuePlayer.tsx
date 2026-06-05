@@ -278,7 +278,9 @@ export function QueuePlayer({ queue, player, obs, onObs }: Props) {
               className="h-4 w-4 rounded accent-brand-500"
             />
             <Repeat className="h-4 w-4 text-slate-500" />
-            Loop queue
+            <span title="After the last queue item finishes, start again from the first item">
+              Loop entire queue
+            </span>
           </label>
         </div>
 

@@ -137,7 +137,7 @@ async def _check_via_http(obs_streaming: bool) -> tuple[bool, bool, str, str]:
                 return (
                     False,
                     False,
-                    f"Nothing listening on port {HLS_PORT} — run start-mediamtx.cmd",
+                    f"Nothing listening on port {HLS_PORT} — run mediamtx.cmd or start-stack.cmd",
                     preferred,
                 )
             if probe.status_code < 500:
@@ -157,7 +157,7 @@ async def _check_via_http(obs_streaming: bool) -> tuple[bool, bool, str, str]:
         return (
             False,
             False,
-            f"Nothing listening on port {HLS_PORT} — run start-mediamtx.cmd",
+            f"Nothing listening on port {HLS_PORT} — run mediamtx.cmd or start-stack.cmd",
             preferred,
         )
     except httpx.TimeoutException:

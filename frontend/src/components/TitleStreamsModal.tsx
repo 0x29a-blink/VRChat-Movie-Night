@@ -1,4 +1,4 @@
-import { Download, ListPlus, Loader2, Play, X } from "lucide-react";
+import { Download, HardDriveDownload, ListPlus, Loader2, Play, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
@@ -11,6 +11,8 @@ import { StreamResultsPanel } from "./StreamFiltersPanel";
 import { usePlayback } from "./PlaybackContext";
 import type { StreamTarget } from "./streamTarget";
 import { loadStreamFilters, saveStreamFilters } from "../streamFilters";
+import { copyStreamDownloadLink, saveLibraryItemToPc, saveStreamToPc } from "../localDownload";
+import { useToast } from "./Toast";
 import { filterAndSortStreams, streamKey } from "../streamListUtils";
 
 const INITIAL_FILTERS = loadStreamFilters();
@@ -19,11 +21,14 @@ export function TitleStreamsModal({
   open,
   target,
   onClose,
+  allowLocalDownload = false,
 }: {
   open: boolean;
   target: StreamTarget | null;
   onClose: () => void;
+  allowLocalDownload?: boolean;
 }) {
+  const { push: pushToast } = useToast();
   const { playFromLibrary, queueFromLibrary } = usePlayback();
   const [seasons, setSeasons] = useState<{ season_number: number; name: string; episode_count: number }[]>([]);
   const [season, setSeason] = useState<number | undefined>();
@@ -182,6 +187,44 @@ export function TitleStreamsModal({
     }
   };
 
+  const saveStreamLocal = async (s: StreamResult) => {
+    setError("");
+    try {
+      await saveStreamToPc(s);
+      pushToast("Opening TorBox download in your browser", "success");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Could not open TorBox link";
+      setError(msg);
+      pushToast(msg, "error");
+    }
+  };
+
+  const copyStreamLink = async (s: StreamResult) => {
+    setError("");
+    try {
+      await copyStreamDownloadLink(s);
+      pushToast("TorBox download link copied", "success");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Could not copy link";
+      setError(msg);
+      pushToast(msg, "error");
+    }
+  };
+
+  const saveLibraryLocal = async () => {
+    const lib = target?.libraryMatch;
+    if (!lib?.id) return;
+    setError("");
+    try {
+      await saveLibraryItemToPc(lib.id);
+      pushToast("Opening TorBox download in your browser", "success");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Could not open TorBox link";
+      setError(msg);
+      pushToast(msg, "error");
+    }
+  };
+
   const grabCache = async (s: StreamResult) => {
     const min = Number(minSeeders);
     if (min > 0 && s.seeders > 0 && s.seeders < min) {
@@ -308,6 +351,16 @@ export function TitleStreamsModal({
                     <ListPlus className="h-3.5 w-3.5" /> Add to queue
                   </button>
                   <InLibraryChip />
+                  {allowLocalDownload && (
+                    <button
+                      type="button"
+                      onClick={saveLibraryLocal}
+                      className="btn-ghost border border-white/10 text-xs"
+                    >
+                      <HardDriveDownload className="h-3.5 w-3.5" />
+                      TorBox download
+                    </button>
+                  )}
                 </>
               )}
               {target.mediaType === "movie" && (
@@ -425,6 +478,9 @@ export function TitleStreamsModal({
               grabbed={grabbed}
               onGrabCached={grabCached}
               onGrabCache={grabCache}
+              showLocalDownload={allowLocalDownload}
+              onLocalDownload={saveStreamLocal}
+              onCopyLink={copyStreamLink}
               filters={{
                 searchText,
                 minRes,

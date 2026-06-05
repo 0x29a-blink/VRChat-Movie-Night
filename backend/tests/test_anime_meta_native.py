@@ -26,6 +26,7 @@ def test_anilist_synthetic_videos():
     assert vids[0]["id"] == "anilist:21:1"
 
 
+@pytest.mark.network
 def test_fetch_kitsu_meta_integration():
     import asyncio
 

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from .. import auth, settings_store
 from ..downloads.manager import manager as download_manager
 from ..obs.controller import aio, controller
+from ..obs.setup import apply_obs_recommendations, audit_obs
 
 router = APIRouter(prefix="/api/settings", tags=["settings"],
                    dependencies=[Depends(auth.require_auth)])
@@ -44,4 +45,19 @@ def reset_aiostreams_auto():
 @router.post("/test-obs")
 async def test_obs():
     controller._reset()  # noqa: SLF001
-    return await aio(controller.connection_info)
+    info = await aio(controller.connection_info)
+    audit = await aio(audit_obs, controller)
+    return {**info, "audit": audit}
+
+
+@router.get("/obs-audit")
+async def obs_audit():
+    controller._reset()  # noqa: SLF001
+    return await aio(audit_obs, controller)
+
+
+@router.post("/obs-apply")
+async def obs_apply():
+    """Apply Movie Night stream + media source defaults where possible."""
+    controller._reset()  # noqa: SLF001
+    return await aio(apply_obs_recommendations, controller)

@@ -243,6 +243,7 @@ export interface UserInfo {
   username: string;
   role: "admin" | "member";
   watchlist_stats_excluded?: boolean;
+  allow_local_download?: boolean;
   created_at?: string;
 }
 

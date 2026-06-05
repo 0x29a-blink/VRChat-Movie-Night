@@ -9,6 +9,59 @@ from .anime_meta import is_anime_stremio_id, resolve_anime_title
 from .ids import anilist_id, collection_id, kitsu_id, mal_id
 
 
+def _meta_to_search_result(meta: dict, media_type: str) -> dict:
+    mt = (meta.get("type") or media_type or "movie").lower()
+    if mt in ("tv", "series"):
+        kind = "series"
+    else:
+        kind = "movie"
+    raw_rating = meta.get("imdbRating")
+    rating = 0.0
+    if raw_rating is not None and str(raw_rating).strip().lower() not in ("", "nan", "n/a", "none"):
+        try:
+            rating = float(str(raw_rating).split("/")[0].strip())
+        except ValueError:
+            rating = 0.0
+    return {
+        "tmdb_id": 0,
+        "type": kind,
+        "title": meta.get("name") or "",
+        "year": (meta.get("releaseInfo") or "")[:4],
+        "overview": meta.get("description") or "",
+        "poster": meta.get("poster") or "",
+        "rating": rating,
+        "stremio_id": (meta.get("id") or "").strip(),
+    }
+
+
+async def _resolve_title_via_meta(stremio_id: str, media_type: str) -> dict | None:
+    """TorBox library / addon catalog ids — use AIOStreams meta, not TMDB."""
+    sid = (stremio_id or "").strip()
+    if not sid:
+        return None
+    types_to_try: list[str] = []
+    for t in (media_type, "movie", "series", "anime"):
+        if t not in types_to_try:
+            types_to_try.append(t)
+    for t in types_to_try:
+        path_type = "series" if t in ("series", "tv", "anime") else "movie"
+        meta = await _try_fetch_meta(path_type, sid)
+        if meta and meta.get("name"):
+            return _meta_to_search_result(meta, path_type)
+    return None
+
+
+def _should_resolve_via_meta(stremio_id: str) -> bool:
+    sid = (stremio_id or "").strip()
+    if not sid or collection_id(sid) is not None:
+        return False
+    if sid.startswith("tmdb:") or sid.isdigit() or sid.startswith("tt"):
+        return False
+    if is_anime_stremio_id(sid):
+        return False
+    return True
+
+
 async def open_item(stremio_id: str, media_type: str) -> dict:
     sid = (stremio_id or "").strip()
     cid = collection_id(sid)
@@ -40,6 +93,11 @@ async def open_item(stremio_id: str, media_type: str) -> dict:
                     "poster": meta.get("poster") or "",
                     "movies": movies,
                 }
+
+    if _should_resolve_via_meta(sid):
+        resolved = await _resolve_title_via_meta(sid, media_type)
+        if resolved:
+            return {"action": "title", "title": resolved}
 
     return {"action": "title", "title": await tmdb.resolve_stremio_id(sid, media_type)}
 

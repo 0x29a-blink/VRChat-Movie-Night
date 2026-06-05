@@ -1,5 +1,6 @@
 import {
   Film,
+  HardDriveDownload,
   Languages,
   Link2,
   ListPlus,
@@ -16,7 +17,8 @@ import {
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { fmtBytes, fmtDuration } from "../format";
-import type { LibraryItem } from "../types";
+import { canLocalDownload, saveLibraryItemToPc } from "../localDownload";
+import type { LibraryItem, UserInfo } from "../types";
 import { AddToWatchlistButton } from "./AddToWatchlist";
 import { ConfirmModal } from "./ConfirmModal";
 import { LinkTmdbModal } from "./LinkTmdbModal";
@@ -31,7 +33,7 @@ const FOLDER_META: Record<string, { label: string; icon: typeof Youtube }> = {
   torrents: { label: "Movies & Shows", icon: Film },
 };
 
-export function Library({ version }: { version: number }) {
+export function Library({ version, user }: { version: number; user: UserInfo }) {
   const { playFromLibrary, queueFromLibrary } = usePlayback();
   const { push: pushToast } = useToast();
   const [data, setData] = useState<Record<string, LibraryItem[]>>({});
@@ -131,6 +133,16 @@ export function Library({ version }: { version: number }) {
   const posterFor = (item: LibraryItem) => item.poster || item.thumbnail;
 
   const total = Object.values(data).reduce((n, arr) => n + arr.length, 0);
+  const allowLocalDownload = canLocalDownload(user);
+
+  const saveToPc = async (item: LibraryItem) => {
+    try {
+      await saveLibraryItemToPc(item.id);
+      pushToast("Opening TorBox download in your browser", "success");
+    } catch (err: unknown) {
+      pushToast(err instanceof Error ? err.message : "Could not open TorBox link", "error");
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -286,6 +298,17 @@ export function Library({ version }: { version: number }) {
                         </button>
                         {tracksItemId === item.id && (
                           <PlaybackTracksPanel libraryId={item.id} compact />
+                        )}
+                        {allowLocalDownload && item.folder === "torrents" && (
+                          <button
+                            type="button"
+                            onClick={() => saveToPc(item)}
+                            className="btn-ghost w-full justify-center py-1 text-[11px] text-sky-300"
+                            title="Opens a TorBox CDN link (matched on your TorBox account)"
+                          >
+                            <HardDriveDownload className="h-3 w-3" />
+                            TorBox download
+                          </button>
                         )}
                         {item.linked ? (
                           <>

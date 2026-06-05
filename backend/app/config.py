@@ -74,6 +74,10 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+from .tool_paths import apply_bundled_tool_defaults  # noqa: E402
+
+apply_bundled_tool_defaults(settings)
+
 # Ensure folders exist
 for _p in (
     settings.data_path,

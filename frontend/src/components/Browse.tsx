@@ -1,6 +1,8 @@
-import { Check, Download, FolderOpen, Layers, Loader2, Search, Sparkles } from "lucide-react";
+import { Check, Download, FolderOpen, HardDriveDownload, Layers, Loader2, Search, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { saveBrowseTorboxItemToPc } from "../localDownload";
+import { useToast } from "./Toast";
 import { isAnimeStremioId } from "../animeIds";
 import { AddToWatchlistButton, type WatchlistAddPayload } from "./AddToWatchlist";
 import { StreamOpenLink, StreamNewTabButton, BROWSE_CARD } from "./StreamOpenLink";
@@ -95,6 +97,15 @@ function watchlistFromBrowseItem(item: BrowseItem): WatchlistAddPayload | null {
 
 function catalogKey(c: CatalogInfo) {
   return `${c.type}:${c.id}`;
+}
+
+function isTorboxLibraryCatalog(cat: CatalogInfo | null): boolean {
+  if (!cat) return false;
+  const id = (cat.id || "").toLowerCase();
+  const name = (cat.name || "").toLowerCase();
+  if (id.includes("library")) return true;
+  if (name.includes("library") && (id.includes("torbox") || name.includes("torbox"))) return true;
+  return name === "library" || name === "my library" || name === "torbox library";
 }
 
 function isGenreExtra(name: string) {
@@ -246,9 +257,17 @@ function CatalogPicker({
   );
 }
 
-export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void }) {
+export function Browse({
+  onPickTitle,
+  allowLocalDownload = false,
+}: {
+  onPickTitle: (r: SearchResult) => void;
+  allowLocalDownload?: boolean;
+}) {
+  const { push: pushToast } = useToast();
   const [source, setSource] = useState<BrowseSource>("collections");
   const [error, setError] = useState("");
+  const [torboxDownloadBusy, setTorboxDownloadBusy] = useState<string | null>(null);
 
   // TMDB collections
   const [collQuery, setCollQuery] = useState("");
@@ -268,6 +287,7 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
   const [items, setItems] = useState<BrowseItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [hasMore, setHasMore] = useState(false);
+  const [torboxLibraryCatalog, setTorboxLibraryCatalog] = useState(false);
   const [resolving, setResolving] = useState(false);
 
   const loadCollections = useCallback(async (q: string) => {
@@ -348,6 +368,9 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
         const res = await api.browseItems(cat.type, cat.id, skip, q, extras);
         setItems((prev) => (append ? [...prev, ...res.items] : res.items));
         setHasMore(res.has_more);
+        setTorboxLibraryCatalog(
+          !!res.torbox_library || isTorboxLibraryCatalog(cat)
+        );
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "Failed to load catalog");
       } finally {
@@ -390,6 +413,25 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
     }, 350);
     return () => clearTimeout(t);
   }, [catalogSearch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const showTorboxDownload =
+    allowLocalDownload && torboxLibraryCatalog && source === "aiostreams";
+
+  const downloadTorboxItem = async (item: BrowseItem) => {
+    const key = item.stremio_id || item.title;
+    setTorboxDownloadBusy(key);
+    setError("");
+    try {
+      await saveBrowseTorboxItemToPc(item);
+      pushToast("TorBox download opened in your browser", "success");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "TorBox download failed";
+      setError(msg);
+      pushToast(msg, "error");
+    } finally {
+      setTorboxDownloadBusy(null);
+    }
+  };
 
   const pickBrowseItem = async (item: BrowseItem) => {
     setResolving(true);
@@ -436,6 +478,8 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
       watchlist?: WatchlistAddPayload;
       openParams?: StreamOpenParams;
       onOpen: () => void;
+      onTorboxDownload?: () => void;
+      torboxDownloadBusy?: boolean;
     }[];
   }) => (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
@@ -486,25 +530,53 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
               </div>
             </button>
           )}
-          {r.openParams && (
-            <div className="flex gap-1 border-t border-white/5 px-2 pb-2 pt-1">
-              {r.watchlist && (
-                <AddToWatchlistButton
-                  payload={r.watchlist}
-                  label="Watchlist"
-                  className="btn-ghost min-w-0 flex-1 justify-center py-1 text-[10px]"
-                />
+          {(r.openParams || r.onTorboxDownload) && (
+            <div
+              className={`grid gap-1 border-t border-white/5 p-2 ${
+                r.onTorboxDownload && r.openParams ? "grid-cols-2" : "grid-cols-1"
+              }`}
+            >
+              {r.onTorboxDownload && (
+                <button
+                  type="button"
+                  disabled={!!r.torboxDownloadBusy || resolving}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    r.onTorboxDownload?.();
+                  }}
+                  className="btn-ghost col-span-full min-w-0 justify-center gap-1 py-1.5 text-[10px] text-sky-300"
+                  title="Open TorBox CDN link in browser (already on your TorBox account)"
+                >
+                  {r.torboxDownloadBusy ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <HardDriveDownload className="h-3 w-3" />
+                  )}
+                  TorBox download
+                </button>
               )}
-              <StreamOpenLink
-                params={r.openParams}
-                onOpenInPlace={r.onOpen}
-                disabled={resolving}
-                title="Middle-click or Ctrl+click to open in a new tab"
-                className="btn-primary min-w-0 flex-1 justify-center py-1 text-[10px] no-underline"
-              >
-                <Download className="h-3 w-3" /> Streams
-              </StreamOpenLink>
-              <StreamNewTabButton params={r.openParams} disabled={resolving} />
+              {r.openParams && (
+                <>
+                  {r.watchlist ? (
+                    <AddToWatchlistButton
+                      payload={r.watchlist}
+                      label="Watchlist"
+                      className="btn-ghost min-w-0 justify-center py-1 text-[10px]"
+                    />
+                  ) : (
+                    <div />
+                  )}
+                  <StreamOpenLink
+                    params={r.openParams}
+                    onOpenInPlace={r.onOpen}
+                    disabled={resolving}
+                    title="Middle-click or Ctrl+click to open in a new tab"
+                    className="btn-primary min-w-0 justify-center gap-1 py-1 text-[10px] no-underline"
+                  >
+                    <Download className="h-3 w-3 shrink-0" /> Streams
+                  </StreamOpenLink>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -779,13 +851,20 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
                 </div>
               ) : (
                 <>
+                  {showTorboxDownload && (
+                    <p className="text-xs text-sky-300/90">
+                      TorBox library — use <span className="text-sky-200">TorBox download</span> for items already on
+                      your account (no stream search needed).
+                    </p>
+                  )}
                   <TitleGrid
                     rows={items.map((item, i) => {
                       const isCollection = item.kind === "collection";
                       const watchlist = watchlistFromBrowseItem(item);
                       const openParams = streamOpenFromBrowseItem(item);
+                      const rowKey = item.stremio_id || String(i);
                       return {
-                        key: item.stremio_id || String(i),
+                        key: rowKey,
                         title: item.title,
                         year: item.year,
                         poster: item.poster,
@@ -794,6 +873,11 @@ export function Browse({ onPickTitle }: { onPickTitle: (r: SearchResult) => void
                         openParams: openParams ?? undefined,
                         watchlist: watchlist ?? undefined,
                         onOpen: () => pickBrowseItem(item),
+                        onTorboxDownload:
+                          showTorboxDownload && !isCollection
+                            ? () => downloadTorboxItem(item)
+                            : undefined,
+                        torboxDownloadBusy: torboxDownloadBusy === rowKey,
                       };
                     })}
                   />

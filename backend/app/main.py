@@ -51,6 +51,9 @@ from .routers import (
     search_routes,
     settings_routes,
     stats_routes,
+    stream_routes,
+    mediamtx_routes,
+    torbox_routes,
     backup_routes,
     users_routes,
     watchlist_routes,
@@ -86,6 +89,9 @@ for r in (
     player_routes.router,
     obs_routes.router,
     settings_routes.router,
+    stream_routes.router,
+    mediamtx_routes.router,
+    torbox_routes.router,
     stats_routes.router,
     backup_routes.router,
     users_routes.router,
@@ -137,6 +143,7 @@ async def _player_poller() -> None:
         await asyncio.sleep(1.0)
         try:
             await queue_manager.poll_playback_end()
+            await queue_manager.poll_playback_stall()
             await queue_manager.broadcast_player()
         except Exception:
             pass

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 from pathlib import Path
 
@@ -9,7 +10,18 @@ from ..library.playback import build_playback_file
 from ..obs.controller import aio, controller
 from ..ws import hub
 
+logger = logging.getLogger(__name__)
+
 CURRENT_KEY = "queue.current_index"
+
+# Ignore auto-advance briefly after any intentional track change (covers remux + OBS swap).
+_IGNORE_END_AFTER_PLAY_SEC = 12.0
+# Minimum gap between successful auto-advances (event + poller can both fire).
+_ADVANCE_DEBOUNCE_SEC = 2.0
+# No cursor progress while "playing" → treat as frozen/corrupt and skip.
+_STALL_NO_PROGRESS_SEC = 45.0
+# OBS often reports duration=0 for broken tiny files — skip sooner.
+_STALL_ZERO_DURATION_SEC = 20.0
 
 
 class QueueManager:
@@ -17,6 +29,9 @@ class QueueManager:
         self._advance_lock = asyncio.Lock()
         self._last_media_state = ""
         self._last_advance_at = 0.0
+        self._ignore_end_until = 0.0
+        self._stall_last_cursor: int | None = None
+        self._stall_last_move_at = 0.0
 
     def _current_index(self) -> int:
         val = settings_store.get(CURRENT_KEY, -1)
@@ -27,6 +42,56 @@ class QueueManager:
 
     def _set_current_index(self, idx: int) -> None:
         settings_store.set_value(CURRENT_KEY, idx)
+
+    def _begin_play_switch(self) -> None:
+        """Suppress spurious end-of-playback while OBS loads the next file."""
+        self._ignore_end_until = time.monotonic() + _IGNORE_END_AFTER_PLAY_SEC
+        # Force the poller to observe a fresh transition into ENDED on the new file.
+        self._last_media_state = ""
+        self._reset_stall_watch()
+
+    def _reset_stall_watch(self) -> None:
+        self._stall_last_cursor = None
+        self._stall_last_move_at = 0.0
+
+    @staticmethod
+    def _stall_timeout_sec(duration_ms: int) -> float:
+        return _STALL_ZERO_DURATION_SEC if duration_ms <= 0 else _STALL_NO_PROGRESS_SEC
+
+    @staticmethod
+    def _cursor_moved(prev: int | None, cursor: int) -> bool:
+        if prev is None:
+            return True
+        return cursor != prev
+
+    def _should_auto_advance(self) -> bool:
+        if self._current_index() < 0:
+            return False
+        return time.monotonic() >= self._ignore_end_until
+
+    @staticmethod
+    def _ended_looks_natural(status: dict) -> bool:
+        """True when playback appears to have finished normally (not mid-switch)."""
+        if status.get("media_state") != "OBS_MEDIA_STATE_ENDED":
+            return False
+        duration = int(status.get("duration") or 0)
+        cursor = int(status.get("cursor") or 0)
+        if duration <= 0:
+            return False
+        if cursor >= max(0, duration - 3000):
+            return True
+        return cursor / duration >= 0.92
+
+    @staticmethod
+    def _ended_looks_broken(status: dict) -> bool:
+        """ENDED at the start or with no real timeline — typical for corrupt/empty files."""
+        if status.get("media_state") != "OBS_MEDIA_STATE_ENDED":
+            return False
+        duration = int(status.get("duration") or 0)
+        cursor = int(status.get("cursor") or 0)
+        if duration <= 0:
+            return True
+        return cursor < 3000
 
     def _items(self, s) -> list[QueueItem]:
         return s.query(QueueItem).order_by(QueueItem.position.asc()).all()
@@ -124,6 +189,7 @@ class QueueManager:
 
     # ---- playback -------------------------------------------------------
     async def play_index(self, idx: int) -> dict:
+        self._begin_play_switch()
         with SessionLocal() as s:
             items = self._items(s)
             if idx < 0 or idx >= len(items):
@@ -176,16 +242,106 @@ class QueueManager:
 
         schedule(self.advance_after_end())
 
-    async def advance_after_end(self) -> None:
-        """Advance queue when the current file finishes (event + poller)."""
+    async def _auto_advance(self, reason: str) -> None:
         async with self._advance_lock:
-            if self._current_index() < 0:
+            if not self._should_auto_advance():
                 return
             now = time.monotonic()
-            if now - self._last_advance_at < 2.0:
+            if now - self._last_advance_at < _ADVANCE_DEBOUNCE_SEC:
                 return
+            try:
+                snap = await self.next()
+            except Exception:
+                self._last_media_state = ""
+                self._reset_stall_watch()
+                raise
             self._last_advance_at = now
-            await self.next()
+            self._reset_stall_watch()
+            cur_idx = snap.get("current_index", -1)
+            cur = snap.get("current") or {}
+            title = cur.get("title") or "next item"
+            logger.info("Queue auto-advanced (%s) to index %s (%s)", reason, cur_idx, title)
+
+    async def advance_after_end(self) -> None:
+        """Advance queue when the current file finishes (event + poller)."""
+        if not self._should_auto_advance():
+            return
+        now = time.monotonic()
+        if now - self._last_advance_at < _ADVANCE_DEBOUNCE_SEC:
+            return
+        try:
+            status = await aio(controller.status)
+        except Exception:
+            return
+        if not self._ended_looks_natural(status):
+            logger.debug(
+                "Ignoring playback end (cursor=%s duration=%s)",
+                status.get("cursor"),
+                status.get("duration"),
+            )
+            return
+        await self._auto_advance("playback ended")
+
+    async def poll_playback_stall(self) -> None:
+        """Skip to next when PLAYING but the timeline has not moved (corrupt/frozen file)."""
+        if not self._should_auto_advance():
+            return
+        try:
+            status = await aio(controller.status)
+        except Exception:
+            return
+
+        state = status.get("media_state", "")
+        cursor = int(status.get("cursor") or 0)
+        duration = int(status.get("duration") or 0)
+
+        if state == "OBS_MEDIA_STATE_PAUSED":
+            self._stall_last_cursor = cursor
+            self._stall_last_move_at = time.monotonic()
+            return
+
+        if state == "OBS_MEDIA_STATE_ERROR":
+            logger.warning(
+                "OBS media error (cursor=%s duration=%s), skipping",
+                cursor,
+                duration,
+            )
+            await self._auto_advance("media error")
+            return
+
+        if state in (
+            "OBS_MEDIA_STATE_OPENING",
+            "OBS_MEDIA_STATE_BUFFERING",
+            "OBS_MEDIA_STATE_NONE",
+        ):
+            return
+
+        if state != "OBS_MEDIA_STATE_PLAYING":
+            self._reset_stall_watch()
+            return
+
+        now = time.monotonic()
+        if self._stall_last_move_at <= 0:
+            self._stall_last_move_at = now
+            self._stall_last_cursor = cursor
+            return
+
+        if self._cursor_moved(self._stall_last_cursor, cursor):
+            self._stall_last_cursor = cursor
+            self._stall_last_move_at = now
+            return
+
+        limit = self._stall_timeout_sec(duration)
+        if now - self._stall_last_move_at < limit:
+            return
+
+        logger.warning(
+            "Playback stalled for %.0fs (cursor=%s duration=%s), skipping",
+            now - self._stall_last_move_at,
+            cursor,
+            duration,
+        )
+        await self._auto_advance("playback stalled")
 
     async def poll_playback_end(self) -> None:
         """Fallback when OBS WebSocket end events do not fire."""
@@ -198,7 +354,16 @@ class QueueManager:
         self._last_media_state = state
         if state != "OBS_MEDIA_STATE_ENDED" or prev == "OBS_MEDIA_STATE_ENDED":
             return
-        await self.advance_after_end()
+        if self._ended_looks_natural(status):
+            await self.advance_after_end()
+            return
+        if self._ended_looks_broken(status):
+            logger.warning(
+                "Abnormal end (likely corrupt file) cursor=%s duration=%s, skipping",
+                status.get("cursor"),
+                status.get("duration"),
+            )
+            await self._auto_advance("broken media ended")
 
     async def broadcast_player(self) -> None:
         try:

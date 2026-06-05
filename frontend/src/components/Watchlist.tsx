@@ -37,6 +37,7 @@ import type { TmdbEpisode, UserInfo, WatchlistGroup, WatchlistItem, WatchlistUse
 import { streamTargetFromWatchlistItem, type StreamTarget } from "./streamTarget";
 import { InLibraryChip } from "./InLibraryChip";
 import { TitleMediaActions } from "./TitleMediaActions";
+import { canLocalDownload } from "../localDownload";
 import { TitleStreamsModal } from "./TitleStreamsModal";
 import { WheelSpinModal } from "./WheelSpinModal";
 import { usePlayback } from "./PlaybackContext";
@@ -1733,6 +1734,7 @@ export function Watchlist({
         open={!!streamTarget}
         target={streamTarget}
         onClose={() => setStreamTarget(null)}
+        allowLocalDownload={canLocalDownload(user)}
       />
 
       {deleteTarget && (

@@ -117,7 +117,7 @@ if %BUILD_OK% neq 0 (
 echo  Setup complete.
 echo.
 echo  Next steps:
-echo    1. Run start-aiostreams.cmd  ^(or start-movie-night.cmd to launch everything^)
+echo    1. Run start-aiostreams.cmd  ^(or start-stack.cmd to launch everything^)
 echo    2. Open http://localhost:3000/stremio/configure
 echo    3. Enable marketplace addons + built-ins ^(Torrentio, Knaben, etc.^)
 echo       — these are disabled on public instances but work on your own instance.

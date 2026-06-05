@@ -1,4 +1,5 @@
 import re
+import unicodedata
 
 import httpx
 
@@ -7,10 +8,148 @@ from .numbers import safe_float
 
 TMDB_API = "https://api.themoviedb.org/3"
 TMDB_IMG = "https://image.tmdb.org/t/p/w342"
+_MIDDLE_DOT = "\u00b7"
 
 
 def _key() -> str:
     return settings_store.get("tmdb_api_key", "") or ""
+
+
+def normalize_title_for_match(text: str) -> str:
+    """Fold punctuation variants (WALL-E, WALL·E, WALL.E) to a comparable token."""
+    if not text:
+        return ""
+    folded = unicodedata.normalize("NFKD", text).lower()
+    for ch in "-_.·:'\" ":
+        folded = folded.replace(ch, "")
+    return re.sub(r"[^a-z0-9]", "", folded)
+
+
+def search_query_variants(query: str) -> list[str]:
+    """Generate TMDB query variants for titles with punctuation quirks."""
+    q = (query or "").strip()
+    if not q:
+        return []
+
+    variants: list[str] = []
+
+    def add(value: str) -> None:
+        value = value.strip()
+        if value and value not in variants:
+            variants.append(value)
+
+    add(q)
+    for src, dst in (
+        ("-", _MIDDLE_DOT),
+        ("-", " "),
+        ("-", "."),
+        (".", _MIDDLE_DOT),
+        (_MIDDLE_DOT, "-"),
+        (" ", _MIDDLE_DOT),
+    ):
+        if src in q:
+            add(q.replace(src, dst))
+    add(re.sub(r"[^\w\s]+", " ", q))
+    add(re.sub(r"[^\w\s]+", "", q))
+    return variants
+
+
+def title_match_score(query: str, title: str) -> float:
+    nq = normalize_title_for_match(query)
+    nt = normalize_title_for_match(title)
+    if not nq or not nt:
+        return 0.0
+    if nq == nt:
+        return 100.0
+    if nt.startswith(nq) or nq.startswith(nt):
+        return 80.0
+    if nq in nt or nt in nq:
+        return 60.0
+    return 0.0
+
+
+def _result_from_multi_item(item: dict) -> dict | None:
+    media_type = item.get("media_type")
+    if media_type not in ("movie", "tv"):
+        return None
+    poster = item.get("poster_path")
+    return {
+        "tmdb_id": item.get("id"),
+        "type": "movie" if media_type == "movie" else "series",
+        "title": item.get("title") or item.get("name") or "",
+        "year": (item.get("release_date") or item.get("first_air_date") or "")[:4],
+        "overview": item.get("overview", ""),
+        "poster": f"{TMDB_IMG}{poster}" if poster else "",
+        "rating": safe_float(item.get("vote_average"), 0.0),
+        "_popularity": safe_float(item.get("popularity"), 0.0),
+    }
+
+
+def _rank_search_results(query: str, rows: list[dict]) -> list[dict]:
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            -title_match_score(query, row.get("title") or ""),
+            -float(row.get("_popularity") or 0.0),
+            row.get("title") or "",
+        ),
+    )
+    for row in ranked:
+        row.pop("_popularity", None)
+    return ranked
+
+
+async def _search_multi(client: httpx.AsyncClient, query: str) -> list[dict]:
+    data = await _get(client, "/search/multi", {"query": query, "include_adult": "false"})
+    out: list[dict] = []
+    for item in data.get("results", []):
+        row = _result_from_multi_item(item)
+        if row:
+            out.append(row)
+    return out
+
+
+async def _search_movie(client: httpx.AsyncClient, query: str) -> list[dict]:
+    data = await _get(client, "/search/movie", {"query": query})
+    out: list[dict] = []
+    for item in data.get("results", []) or []:
+        row = _search_result_from_tmdb(item, "movie")
+        row["_popularity"] = safe_float(item.get("popularity"), 0.0)
+        out.append(row)
+    return out
+
+
+async def _search_tv(client: httpx.AsyncClient, query: str) -> list[dict]:
+    data = await _get(client, "/search/tv", {"query": query})
+    out: list[dict] = []
+    for item in data.get("results", []) or []:
+        row = _search_result_from_tmdb(item, "series")
+        row["_popularity"] = safe_float(item.get("popularity"), 0.0)
+        out.append(row)
+    return out
+
+
+async def _collect_ranked_results(
+    client: httpx.AsyncClient,
+    query: str,
+    *,
+    search_fn,
+) -> list[dict]:
+    seen: dict[int, dict] = {}
+    for variant in search_query_variants(query):
+        for row in await search_fn(client, variant):
+            tid = row.get("tmdb_id")
+            if not tid or tid in seen:
+                continue
+            seen[tid] = row
+    return _rank_search_results(query, list(seen.values()))
+
+
+def _pick_best_result(query: str, results: list[dict]) -> dict | None:
+    if not results:
+        return None
+    ranked = _rank_search_results(query, [dict(row) for row in results])
+    return ranked[0]
 
 
 async def _get(client: httpx.AsyncClient, path: str, params: dict) -> dict:
@@ -23,26 +162,8 @@ async def _get(client: httpx.AsyncClient, path: str, params: dict) -> dict:
 async def search(query: str) -> list[dict]:
     if not _key():
         raise RuntimeError("TMDB API key is not configured (Settings page).")
-    out: list[dict] = []
     async with httpx.AsyncClient() as client:
-        data = await _get(client, "/search/multi", {"query": query, "include_adult": "false"})
-        for item in data.get("results", []):
-            media_type = item.get("media_type")
-            if media_type not in ("movie", "tv"):
-                continue
-            poster = item.get("poster_path")
-            out.append(
-                {
-                    "tmdb_id": item.get("id"),
-                    "type": "movie" if media_type == "movie" else "series",
-                    "title": item.get("title") or item.get("name") or "",
-                    "year": (item.get("release_date") or item.get("first_air_date") or "")[:4],
-                    "overview": item.get("overview", ""),
-                    "poster": f"{TMDB_IMG}{poster}" if poster else "",
-                    "rating": safe_float(item.get("vote_average"), 0.0),
-                }
-            )
-    return out
+        return await _collect_ranked_results(client, query, search_fn=_search_multi)
 
 
 async def external_ids(tmdb_id: int, type_: str) -> dict:
@@ -94,22 +215,20 @@ async def resolve_by_name(title: str, media_type: str = "series") -> dict:
     kind = "series" if media_type in ("series", "tv", "anime") else "movie"
     async with httpx.AsyncClient() as client:
         if kind == "series":
-            data = await _get(client, "/search/tv", {"query": title})
-            results = data.get("results") or []
+            results = await _collect_ranked_results(client, title, search_fn=_search_tv)
             if not results:
-                data = await _get(client, "/search/multi", {"query": title})
                 results = [
-                    r for r in data.get("results") or []
-                    if r.get("media_type") == "tv"
+                    row
+                    for row in await _collect_ranked_results(client, title, search_fn=_search_multi)
+                    if row.get("type") == "series"
                 ]
         else:
-            data = await _get(client, "/search/movie", {"query": title})
-            results = data.get("results") or []
-    if not results:
+            results = await _collect_ranked_results(client, title, search_fn=_search_movie)
+    picked = _pick_best_result(title, results)
+    if not picked:
         raise RuntimeError(f"Could not find '{title}' on TMDB. Try TMDB search instead.")
-    item = results[0]
-    out = _search_result_from_tmdb(item, kind)
-    out["tmdb_id"] = item.get("id")
+    out = dict(picked)
+    out.pop("_popularity", None)
     return out
 
 

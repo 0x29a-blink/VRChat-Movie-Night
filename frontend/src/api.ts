@@ -1,3 +1,22 @@
+function formatApiDetail(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (item && typeof item === "object" && "msg" in item) {
+          const loc =
+            "loc" in item && Array.isArray(item.loc) ? item.loc.filter(Boolean).join(".") : "";
+          const msg = String((item as { msg?: string }).msg ?? "");
+          return loc ? `${loc}: ${msg}` : msg;
+        }
+        return String(item);
+      })
+      .filter(Boolean)
+      .join("; ");
+  }
+  return String(detail ?? "");
+}
+
 async function req<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     credentials: "include",
@@ -8,7 +27,7 @@ async function req<T>(path: string, options: RequestInit = {}): Promise<T> {
     let detail = res.statusText;
     try {
       const body = await res.json();
-      detail = body.detail || detail;
+      detail = formatApiDetail(body.detail) || detail;
     } catch {
       /* ignore */
     }
@@ -46,6 +65,51 @@ export const api = {
     post<{ ok: boolean; password: string }>(`/api/users/${id}/reset-password`, { password }),
   setUserWatchlistStatsExcluded: (id: number, excluded: boolean) =>
     put<{ user: import("./types").UserInfo }>(`/api/users/${id}/watchlist-stats-excluded`, { excluded }),
+  setUserLocalDownload: (id: number, allowed: boolean) =>
+    put<{ user: import("./types").UserInfo }>(`/api/users/${id}/local-download`, { allowed }),
+
+  torboxDownloadLink: (payload: {
+    url?: string;
+    torrent_id?: number;
+    magnet?: string;
+    info_hash?: string;
+    file_idx?: number;
+    filename?: string;
+    name?: string;
+    description?: string;
+    cached?: boolean;
+    size_bytes?: number;
+  }) =>
+    post<{
+      url: string;
+      torrent_id?: number;
+      file_id?: number;
+      source?: string;
+      note: string;
+    }>("/api/torbox/download-link", payload),
+
+  torboxLibraryDownloadLink: (itemId: number) =>
+    post<{
+      url: string;
+      torrent_id?: number;
+      file_id?: number;
+      source?: string;
+      note: string;
+    }>(`/api/torbox/download-link/library/${itemId}`, {}),
+
+  torboxBrowseDownloadLink: (payload: {
+    stremio_id: string;
+    title?: string;
+    type?: string;
+    overview?: string;
+  }) =>
+    post<{
+      url: string;
+      torrent_id?: number;
+      file_id?: number;
+      source?: string;
+      note: string;
+    }>("/api/torbox/download-link/browse", payload),
 
   // downloads
   listDownloads: () => get<import("./types").Job[]>("/api/downloads"),
@@ -119,7 +183,11 @@ export const api = {
         if (v !== "") url += `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
       }
     }
-    return get<{ items: import("./types").BrowseItem[]; has_more: boolean }>(url);
+    return get<{
+      items: import("./types").BrowseItem[];
+      has_more: boolean;
+      torbox_library?: boolean;
+    }>(url);
   },
   animeMeta: (stremioId: string) =>
     get<{ title: import("./types").SearchResult; seasons: { season_number: number; name: string; episode_count: number }[] }>(
@@ -240,7 +308,97 @@ export const api = {
       aiostreams_base_discovered: string;
     }>("/api/settings/aiostreams/reload"),
   resetAiostreamsAuto: () => post<import("./types").Settings>("/api/settings/aiostreams/reset-auto"),
-  testObs: () => post<{ connected: boolean; streaming: boolean; error?: string }>("/api/settings/test-obs"),
+  testObs: () =>
+    post<{
+      connected: boolean;
+      streaming: boolean;
+      error?: string;
+      audit?: {
+        media_input_ok?: boolean;
+        stream_settings_ok?: boolean;
+        recommendations?: string[];
+        can_auto_fix_stream?: boolean;
+        can_auto_create_input?: boolean;
+      };
+    }>("/api/settings/test-obs"),
+  applyObsDefaults: () =>
+    post<{
+      ok?: boolean;
+      applied?: string[];
+      recommendations?: string[];
+      error?: string;
+    }>("/api/settings/obs-apply"),
+
+  streamPresets: () =>
+    get<{
+      encoder_presets: { id: string; name: string; description: string; settings: Record<string, unknown> }[];
+      video_presets: { id: string; name: string; description: string; video: Record<string, unknown> }[];
+      streaming: boolean;
+    }>("/api/stream/presets"),
+  streamEncoderSettings: () =>
+    get<{ output_name: string; streaming: boolean; settings: Record<string, unknown> }>(
+      "/api/stream/encoder"
+    ),
+  applyEncoderPreset: (preset_id: string) =>
+    post<{ ok: boolean; preset_id: string }>("/api/stream/encoder/apply", { preset_id }),
+  applyVideoPreset: (preset_id: string) =>
+    post<{ ok: boolean; preset_id: string }>("/api/stream/video/apply", { preset_id }),
+
+  mediamtxStatus: () =>
+    get<{
+      presets: { id: string; name: string; description: string }[];
+      active_preset_id: string;
+      api_reachable?: boolean;
+      hls?: Record<string, unknown>;
+      error?: string;
+    }>("/api/mediamtx/status"),
+  applyMediamtxPreset: (preset_id: string) =>
+    post<{
+      ok: boolean;
+      preset_id: string;
+      preset_name: string;
+      applied: Record<string, unknown>;
+      yaml_updated: boolean;
+    }>("/api/mediamtx/preset/apply", { preset_id }),
+
+  hostSpeedtest: () =>
+    get<{
+      ok: boolean;
+      upload_mbps?: number;
+      upload_kbps?: number;
+      preset_id?: string;
+      preset_name?: string;
+      recommended_video_kbps?: number;
+      note?: string;
+      error?: string;
+    }>("/api/stream/speedtest/host"),
+  browserUploadSpeedtest: (blob: Blob) =>
+    fetch("/api/stream/speedtest/upload", {
+      method: "POST",
+      credentials: "include",
+      body: blob,
+    }).then(async (res) => {
+      const text = await res.text();
+      let data: unknown = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = { detail: text };
+      }
+      if (!res.ok) {
+        const d = data as { detail?: string };
+        throw new Error(d.detail || res.statusText);
+      }
+      return data as {
+        ok: boolean;
+        upload_mbps?: number;
+        upload_kbps?: number;
+        preset_id?: string;
+        preset_name?: string;
+        recommended_video_kbps?: number;
+        note?: string;
+      };
+    }),
 
   // watchlist
   watchlistGroups: () =>

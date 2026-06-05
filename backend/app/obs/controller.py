@@ -77,6 +77,9 @@ class OBSController:
                 self._event.callback.register(self.on_media_input_playback_ended)
             except Exception:
                 self._event = None
+                logger.warning(
+                    "OBS event WebSocket unavailable; queue auto-advance uses status polling only"
+                )
             self._offline_until = 0.0
         except Exception as exc:
             self._req = None

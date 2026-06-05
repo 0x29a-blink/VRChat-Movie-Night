@@ -9,10 +9,11 @@ async def fetch_streams_for_video_id(video_id: str) -> tuple[str, list[dict]]:
     if not vid:
         raise RuntimeError("Missing video id for stream lookup.")
     last_err: Exception | None = None
-    for stream_type in ("anime", "series"):
+    for stream_type in ("movie", "series", "anime"):
         try:
             streams = await aiostreams.fetch_streams(stream_type, vid)
-            return vid, streams
+            if streams:
+                return vid, streams
         except Exception as exc:
             last_err = exc
             continue

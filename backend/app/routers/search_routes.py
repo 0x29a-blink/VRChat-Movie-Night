@@ -70,13 +70,32 @@ async def streams(
 ):
     try:
         ext = await tmdb.external_ids(tmdb_id, type)
-        imdb_id = ext.get("imdb_id")
-        if not imdb_id:
-            raise HTTPException(404, "No IMDB id found for this title")
-        video_id = aiostreams.build_video_id(imdb_id, season, episode)
+        imdb_id = ext.get("imdb_id") or ""
         stream_type = "series" if type == "series" else "movie"
-        results = await aiostreams.fetch_streams(stream_type, video_id)
-        return {"imdb_id": imdb_id, "streams": results}
+
+        video_ids: list[str] = []
+        if imdb_id:
+            video_ids.append(aiostreams.build_video_id(imdb_id, season, episode))
+        tmdb_video = aiostreams.build_video_id(f"tmdb:{tmdb_id}", season, episode)
+        if tmdb_video not in video_ids:
+            video_ids.append(tmdb_video)
+
+        results: list[dict] = []
+        resolved_id = video_ids[0] if video_ids else ""
+        for video_id in video_ids:
+            try:
+                batch = await aiostreams.fetch_streams(stream_type, video_id)
+            except httpx.HTTPError:
+                continue
+            if batch:
+                return {"imdb_id": imdb_id or None, "video_id": video_id, "streams": batch}
+            results = batch
+            resolved_id = video_id
+
+        if not video_ids:
+            raise HTTPException(404, "No IMDB id found for this title")
+
+        return {"imdb_id": imdb_id or None, "video_id": resolved_id, "streams": results}
     except RuntimeError as exc:
         raise HTTPException(400, str(exc))
     except httpx.HTTPError as exc:

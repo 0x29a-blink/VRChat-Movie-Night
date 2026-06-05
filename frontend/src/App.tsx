@@ -360,6 +360,7 @@ function AppShell() {
             <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
               {tab === "downloads" && (
                 <Downloads
+                  user={user}
                   jobs={jobs}
                   onChanged={refreshAll}
                   onJobRemoved={(id) => setJobs((prev) => prev.filter((j) => j.id !== id))}
@@ -367,7 +368,7 @@ function AppShell() {
                   onInitialStreamOpenHandled={() => setPendingStreamLaunch(null)}
                 />
               )}
-              {tab === "library" && <Library version={libVersion} />}
+              {tab === "library" && <Library version={libVersion} user={user} />}
               {tab === "watchlist" && (
                 <Watchlist
                   user={user}
