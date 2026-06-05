@@ -160,6 +160,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String, default="member")  # admin | member
     watchlist_stats_excluded: Mapped[bool] = mapped_column(Boolean, default=False)
     watchlist_stats_excluded_at = mapped_column(DateTime, nullable=True)
+    allow_local_download: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     def to_dict(self) -> dict:
@@ -168,6 +169,7 @@ class User(Base):
             "username": self.username,
             "role": self.role,
             "watchlist_stats_excluded": bool(self.watchlist_stats_excluded),
+            "allow_local_download": bool(self.allow_local_download),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

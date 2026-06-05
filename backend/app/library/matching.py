@@ -8,6 +8,8 @@ from ..models import LibraryItem, WatchlistItem
 
 def _normalize_title_name(s: str) -> str:
     t = re.sub(r"\(\d{4}\)", "", s or "")
+    for ch in "·-.":
+        t = t.replace(ch, "")
     return re.sub(r"[^a-z0-9]+", "", t.lower())
 
 

@@ -25,6 +25,10 @@ class WatchlistStatsExcludedBody(BaseModel):
     excluded: bool
 
 
+class LocalDownloadBody(BaseModel):
+    allowed: bool
+
+
 @router.get("")
 def list_users(db: Session = Depends(get_db)):
     users = db.query(User).order_by(User.username).all()
@@ -84,6 +88,21 @@ def set_watchlist_stats_excluded(
         raise HTTPException(404, "User not found")
     user.watchlist_stats_excluded = body.excluded
     user.watchlist_stats_excluded_at = datetime.now(timezone.utc) if body.excluded else None
+    db.commit()
+    db.refresh(user)
+    return {"user": user.to_dict()}
+
+
+@router.put("/{user_id}/local-download")
+def set_local_download_allowed(
+    user_id: int,
+    body: LocalDownloadBody,
+    db: Session = Depends(get_db),
+):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    user.allow_local_download = body.allowed
     db.commit()
     db.refresh(user)
     return {"user": user.to_dict()}

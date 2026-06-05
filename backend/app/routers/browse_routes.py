@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from .. import auth
 from ..search import anime_meta, browse_open, catalog, tmdb
 from ..search.anime_meta import pick_anime_catalog_key
+from ..search.ids import is_torbox_library_catalog
 
 router = APIRouter(prefix="/api/browse", tags=["browse"],
                    dependencies=[Depends(auth.require_auth)])
@@ -42,7 +43,13 @@ async def catalog_items(
         items, has_more = await catalog.fetch_catalog_items(
             type, id, skip=skip, search=search, extras=extras or None
         )
-        return {"items": items, "has_more": has_more, "extras_applied": extras}
+        torbox_library = is_torbox_library_catalog(id, catalog_type=type)
+        return {
+            "items": items,
+            "has_more": has_more,
+            "extras_applied": extras,
+            "torbox_library": torbox_library,
+        }
     except RuntimeError as exc:
         raise HTTPException(400, str(exc))
     except httpx.HTTPError as exc:

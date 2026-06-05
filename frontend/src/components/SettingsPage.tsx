@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { buildHlsUrl, copyHlsUrl, resolveHlsUrl } from "../hlsUrl";
 import type { Settings, UserInfo } from "../types";
+import { MediaMtxSettings } from "./MediaMtxSettings";
+import { StreamQualitySettings } from "./StreamQualitySettings";
 import { ConfirmModal, PromptModal } from "./ConfirmModal";
 import { useToast } from "./Toast";
 
@@ -82,11 +84,29 @@ function UsersAdmin() {
     }
   };
 
+  const toggleLocalDownload = async (u: UserInfo) => {
+    setBusy(true);
+    try {
+      await api.setUserLocalDownload(u.id, !u.allow_local_download);
+      load();
+      pushToast(
+        u.allow_local_download
+          ? `${u.username} can no longer open TorBox download links`
+          : `${u.username} can open TorBox download links (CDN only)`,
+        "info",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Section title="Users (admin)">
       <p className="text-xs text-slate-500">
         Create accounts for your friend group. Password is shown once after create/reset. Exclude inactive friends from
         group watched counts and ratings; they still reappear on a title if they rate, comment, or mark it watched.
+        Per-account <span className="text-slate-300">TorBox download</span> (off by default) opens TorBox CDN links in the
+        user&apos;s browser — no files are streamed from your PC. Server “Download” still copies to your library on disk.
       </p>
       {loading ? (
         <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
@@ -100,8 +120,19 @@ function UsersAdmin() {
                 {u.watchlist_stats_excluded && (
                   <span className="chip ml-1 bg-amber-500/15 text-amber-300">stats excluded</span>
                 )}
+                {u.allow_local_download && (
+                  <span className="chip ml-1 bg-sky-500/15 text-sky-300">TorBox DL</span>
+                )}
               </span>
-              <span className="flex gap-2">
+              <span className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => toggleLocalDownload(u)}
+                  className="btn-ghost px-2 text-xs"
+                >
+                  {u.allow_local_download ? "Disable TorBox download" : "Allow TorBox download"}
+                </button>
                 <button
                   type="button"
                   disabled={busy}
@@ -272,7 +303,12 @@ export function SettingsPage({ user }: { user: UserInfo }) {
   const [displayHlsUrl, setDisplayHlsUrl] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [testResult, setTestResult] = useState<{ connected: boolean; error?: string } | null>(null);
+  const [testResult, setTestResult] = useState<{
+    connected: boolean;
+    error?: string;
+    audit?: { recommendations?: string[] };
+  } | null>(null);
+  const [obsApplying, setObsApplying] = useState(false);
   const [testing, setTesting] = useState(false);
   const [aiostreamsBusy, setAiostreamsBusy] = useState(false);
 
@@ -322,6 +358,20 @@ export function SettingsPage({ user }: { user: UserInfo }) {
       setTestResult(r);
     } finally {
       setTesting(false);
+    }
+  };
+
+  const applyObs = async () => {
+    setObsApplying(true);
+    try {
+      const r = await api.applyObsDefaults();
+      if (r.ok) pushToast("OBS defaults applied", "success");
+      else pushToast(r.error || r.recommendations?.[0] || "Could not apply OBS defaults", "error");
+      await test();
+    } catch (e: unknown) {
+      pushToast(e instanceof Error ? e.message : "Apply failed", "error");
+    } finally {
+      setObsApplying(false);
     }
   };
 
@@ -375,7 +425,7 @@ export function SettingsPage({ user }: { user: UserInfo }) {
       <Section title="VRChat stream URL">
         <p className="text-xs text-slate-500">
           HLS feed on port <strong className="font-normal text-slate-300">8888</strong> (not the web app on
-          8000). Use <strong className="font-normal text-slate-300">start-movie-night.cmd</strong> to launch
+          8000). Use <strong className="font-normal text-slate-300">start-stack.cmd</strong> to launch
           MediaMTX + the app, then open the <strong className="font-normal text-slate-300">Movie Night</strong>{" "}
           tab to verify everything before Go live.
         </p>
@@ -421,6 +471,12 @@ export function SettingsPage({ user }: { user: UserInfo }) {
         </button>
       </Section>
 
+      {user.role === "admin" && (
+        <Section title="MediaMTX HLS presets">
+          <MediaMtxSettings />
+        </Section>
+      )}
+
       <Section title="OBS WebSocket">
         <div className="grid grid-cols-2 gap-3">
           <Field label="Host">
@@ -455,9 +511,12 @@ export function SettingsPage({ user }: { user: UserInfo }) {
             <input className="input" value={s.obs_scene} onChange={(e) => update({ obs_scene: e.target.value })} />
           </Field>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button onClick={test} disabled={testing} className="btn-ghost">
             {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wifi className="h-4 w-4" />} Test connection
+          </button>
+          <button onClick={applyObs} disabled={obsApplying} className="btn-ghost text-sm">
+            {obsApplying ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Apply stream defaults
           </button>
           {testResult &&
             (testResult.connected ? (
@@ -470,6 +529,17 @@ export function SettingsPage({ user }: { user: UserInfo }) {
               </span>
             ))}
         </div>
+        {testResult?.audit?.recommendations && testResult.audit.recommendations.length > 0 && (
+          <ul className="mt-2 list-inside list-disc space-y-1 text-xs text-slate-400">
+            {testResult.audit.recommendations.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
+      <Section title="Stream quality (OBS)">
+        <StreamQualitySettings />
       </Section>
 
       <Section title="Search & Torrents">

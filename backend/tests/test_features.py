@@ -11,7 +11,9 @@ def test_preflight_authenticated(client, db):
     assert "obs_connected" in data
     assert "mediamtx_running" in data
     assert "hls_url" in data
-    assert ":8888/live/vrstream/index.m3u8" in data["hls_url"]
+    assert data["hls_url"].startswith("http://")
+    assert ":8888/" in data["hls_url"]
+    assert "live/vrstream/index.m3u8" in data["hls_url"]
     assert data["users"] >= 1
     assert "tools" in data
     assert "issues" in data

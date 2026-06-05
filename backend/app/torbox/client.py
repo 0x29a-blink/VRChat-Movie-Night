@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import httpx
+
+from ..http_errors import format_api_detail
 
 TORBOX_API = "https://api.torbox.app/v1/api"
 VIDEO_SUFFIXES = (".mkv", ".mp4", ".avi", ".mov", ".m4v", ".webm", ".ts")
@@ -20,6 +24,7 @@ class TorboxClient:
         key = (api_key or "").strip()
         if not key:
             raise TorboxError("TorBox API key is not configured (Settings page).")
+        self._api_key = key
         self._headers = {"Authorization": f"Bearer {key}"}
 
     async def create_torrent(self, magnet: str, name: str = "") -> dict[str, Any]:
@@ -67,6 +72,7 @@ class TorboxClient:
                 f"{TORBOX_API}/torrents/requestdl",
                 headers=self._headers,
                 params={
+                    "token": self._api_key,
                     "torrent_id": torrent_id,
                     "file_id": file_id,
                     "redirect": "false",
@@ -83,6 +89,39 @@ def _torrent_total_bytes(torrent: dict[str, Any]) -> int:
     if total:
         return total
     return sum(int(f.get("size") or 0) for f in torrent.get("files") or [])
+
+
+def normalize_match_hint(text: str) -> str:
+    """Fold titles for TorBox library matching (year tags, punctuation)."""
+    s = (text or "").lower()
+    s = re.sub(r"\(\d{4}\)", " ", s)
+    s = re.sub(r"\[[^\]]*\]", " ", s)
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    return " ".join(s.split())
+
+
+def torrent_matches_hint_loose(torrent: dict[str, Any], title_hint: str) -> bool:
+    """Match catalog display titles to messy torrent/file names on TorBox."""
+    hint_norm = normalize_match_hint(title_hint)
+    if len(hint_norm) < 4:
+        return False
+    tokens = [t for t in hint_norm.split() if len(t) > 2]
+    if not tokens:
+        return False
+
+    def blob_matches(blob: str) -> bool:
+        if not blob:
+            return False
+        if hint_norm in blob or blob in hint_norm:
+            return True
+        return all(t in blob for t in tokens)
+
+    if blob_matches(normalize_match_hint(torrent.get("name") or "")):
+        return True
+    for f in torrent.get("files") or []:
+        if blob_matches(normalize_match_hint(f.get("name") or "")):
+            return True
+    return False
 
 
 def torrent_matches_hint(
@@ -140,11 +179,14 @@ def pick_best_new_torrent(
 
 async def trigger_playback_prewarm(playback_url: str) -> None:
     """Hit AIOStreams playback so TorBox begins caching (same as Stremio play)."""
+    from ..search.aiostreams_auth import prepare_aiostreams_request_url
+
     headers = {"User-Agent": "Mozilla/5.0", "Range": "bytes=0-1"}
+    url = prepare_aiostreams_request_url(playback_url)
     async with httpx.AsyncClient(timeout=45, follow_redirects=False) as client:
         for _ in range(3):
             try:
-                await client.get(playback_url, headers=headers)
+                await client.get(url, headers=headers)
             except httpx.HTTPError:
                 pass
             await asyncio.sleep(2)
@@ -279,9 +321,26 @@ def _unwrap(resp: httpx.Response) -> Any:
     except Exception as exc:
         raise TorboxError(f"TorBox returned invalid JSON ({resp.status_code})") from exc
     if resp.status_code >= 400:
-        detail = body.get("detail") or body.get("error") or resp.text
-        raise TorboxError(str(detail))
+        detail = format_api_detail(body.get("detail") or body.get("error") or resp.text)
+        raise TorboxError(detail or f"TorBox error ({resp.status_code})")
     if not body.get("success"):
-        detail = body.get("detail") or body.get("error") or "TorBox request failed"
-        raise TorboxError(str(detail))
+        detail = format_api_detail(body.get("detail") or body.get("error") or "TorBox request failed")
+        raise TorboxError(detail)
     return body.get("data")
+
+
+def parse_torbox_permalink(url: str) -> tuple[int, int] | None:
+    """TorBox permalinks use ?torrent_id=&file_id=; token must not be sent to clients."""
+    host = (urlparse(url).netloc or "").lower()
+    path = (urlparse(url).path or "").lower()
+    if "torbox.app" not in host or "requestdl" not in path:
+        return None
+    qs = parse_qs(urlparse(url).query)
+    try:
+        tid = int((qs.get("torrent_id") or ["0"])[0] or 0)
+        fid = int((qs.get("file_id") or ["0"])[0] or 0)
+    except (TypeError, ValueError):
+        return None
+    if tid > 0 and fid >= 0:
+        return tid, fid
+    return None

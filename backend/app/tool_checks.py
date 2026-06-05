@@ -1,6 +1,7 @@
 import asyncio
 import shutil
 from dataclasses import dataclass
+from pathlib import Path
 
 from .config import settings
 
@@ -12,10 +13,15 @@ class ToolStatus:
     detail: str = ""
 
 
+def _executable_exists(executable: str) -> bool:
+    p = Path(executable)
+    return p.is_file() or shutil.which(executable) is not None
+
+
 async def _check_tool(name: str, cmd: list[str]) -> ToolStatus:
     executable = cmd[0]
-    if not shutil.which(executable):
-        return ToolStatus(name=name, ok=False, detail=f"{executable} not found on PATH")
+    if not _executable_exists(executable):
+        return ToolStatus(name=name, ok=False, detail=f"{executable} not found")
 
     try:
         proc = await asyncio.create_subprocess_exec(

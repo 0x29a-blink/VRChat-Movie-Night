@@ -1,0 +1,17 @@
+Movie Night — which script to run
+=================================
+
+  start-stack.cmd     USE THIS for movie night (MediaMTX + API + AIOStreams)
+  stop-stack.cmd      Kill hidden MediaMTX if you closed the stack with X
+  startup.cmd         First-time setup menu (tools, build UI, checks)
+  run-dev.cmd         UI dev mode (Vite :5173 + API reload)
+  api-backend.cmd     API only — no HLS for VRChat
+  mediamtx.cmd        MediaMTX alone in one window (debug)
+
+Why MediaMTX was invisible
+--------------------------
+The stack started MediaMTX without its own window. Closing the CMD with X
+did not always stop child processes. start-stack.cmd now:
+  - stops leftovers before starting
+  - records PIDs in .stack/state.json
+  - kills the process tree on Ctrl+C, close, or stop-stack.cmd

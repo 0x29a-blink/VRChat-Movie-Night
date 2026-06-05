@@ -1,7 +1,8 @@
 import { Film, Link2, Loader2, Youtube } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Job } from "../types";
+import type { Job, UserInfo } from "../types";
+import { canLocalDownload } from "../localDownload";
 import type { StreamLaunch } from "../streamOpenUrl";
 import { DownloadJobCard } from "./DownloadJobCard";
 import { Search } from "./Search";
@@ -20,12 +21,14 @@ export function Downloads({
   onJobRemoved,
   initialStreamLaunch,
   onInitialStreamOpenHandled,
+  user,
 }: {
   jobs: Job[];
   onChanged: () => void;
   onJobRemoved?: (id: string) => void;
   initialStreamLaunch?: StreamLaunch | null;
   onInitialStreamOpenHandled?: () => void;
+  user: UserInfo;
 }) {
   const [tab, setTab] = useState<Tab>(() => (initialStreamLaunch ? "search" : "youtube"));
 
@@ -72,6 +75,7 @@ export function Downloads({
             <Search
               initialStreamLaunch={initialStreamLaunch}
               onInitialStreamOpenHandled={onInitialStreamOpenHandled}
+              allowLocalDownload={canLocalDownload(user)}
             />
           )}
         </div>

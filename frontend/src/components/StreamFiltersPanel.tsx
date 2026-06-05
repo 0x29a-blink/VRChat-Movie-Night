@@ -98,9 +98,9 @@ export function StreamFiltersPanel({
         />
       </label>
       <p className="text-[10px] leading-snug text-slate-500">
-        Cached = instant download. Uncached = “Cache &amp; download” (TorBox API key). Seed counts come from
-        indexers — TorBox may show fewer live peers. Rows without a resolution badge usually lack it in the addon
-        name (check filename below).
+        Cached = instant download. Uncached = “Cache &amp; download” (TorBox API key). If a row vanishes after
+        TorBox download, turn off “Cached only” and click Refresh streams — TorBox may mark the link used. Seed counts
+        come from indexers. Rows without a resolution badge usually lack it in the addon name (check filename below).
       </p>
       <label className="block text-xs text-slate-400">
         Audio (release name)
@@ -162,6 +162,9 @@ export function StreamResultsPanel({
   grabbed,
   onGrabCached,
   onGrabCache,
+  showLocalDownload,
+  onLocalDownload,
+  onCopyLink,
   filters,
   onFiltersChange,
 }: {
@@ -170,6 +173,9 @@ export function StreamResultsPanel({
   grabbed: Set<string>;
   onGrabCached: (s: StreamResult) => void;
   onGrabCache: (s: StreamResult) => void;
+  showLocalDownload?: boolean;
+  onLocalDownload?: (s: import("../types").StreamResult) => void;
+  onCopyLink?: (s: import("../types").StreamResult) => void;
   filters: StreamFilterState;
   onFiltersChange: (patch: Partial<StreamFilterState>) => void;
 }) {
@@ -214,6 +220,9 @@ export function StreamResultsPanel({
                 grabbed={grabbed}
                 onGrabCached={onGrabCached}
                 onGrabCache={onGrabCache}
+                showLocalDownload={showLocalDownload}
+                onLocalDownload={onLocalDownload}
+                onCopyLink={onCopyLink}
               />
             ))
           )}

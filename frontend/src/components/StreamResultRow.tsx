@@ -1,4 +1,4 @@
-import { Check, Clock, Download, Zap } from "lucide-react";
+import { Check, Clock, Copy, Download, HardDriveDownload, Zap } from "lucide-react";
 import type { StreamResult } from "../types";
 import { streamKey } from "../streamListUtils";
 
@@ -8,16 +8,31 @@ export function StreamResultRow({
   grabbed,
   onGrabCached,
   onGrabCache,
+  showLocalDownload,
+  onLocalDownload,
+  onCopyLink,
 }: {
   stream: StreamResult;
   index: number;
   grabbed: Set<string>;
   onGrabCached: (s: StreamResult) => void;
   onGrabCache: (s: StreamResult) => void;
+  showLocalDownload?: boolean;
+  onLocalDownload?: (s: StreamResult) => void;
+  onCopyLink?: (s: StreamResult) => void;
 }) {
   const key = streamKey(stream) || String(index);
   const done = grabbed.has(key);
-  const canInstant = stream.cached && stream.playable !== false && !!stream.url;
+  const hasUrl = !!(stream.url || "").trim();
+  const hasTorboxRef = !!(
+    hasUrl ||
+    stream.magnet ||
+    stream.info_hash ||
+    stream.cached
+  );
+  const canInstant = stream.cached && stream.playable !== false && hasUrl;
+  const canLocalSave = showLocalDownload && hasTorboxRef && !!onLocalDownload;
+  const canCopyLink = showLocalDownload && hasTorboxRef && !!onCopyLink;
   const canCache = !stream.cached && (!!stream.cacheable || !!stream.playback_cacheable);
 
   return (
@@ -114,6 +129,33 @@ export function StreamResultRow({
             {done ? <Check className="h-4 w-4" /> : <Download className="h-4 w-4" />}
             {done ? "Queued" : "Download"}
           </button>
+        )}
+        {canLocalSave && (
+          <button
+            type="button"
+            onClick={() => onLocalDownload!(stream)}
+            title="Open TorBox CDN link in browser (nothing streamed from host PC)"
+            className="btn-ghost whitespace-nowrap border border-white/10 text-xs text-slate-300"
+          >
+            <HardDriveDownload className="h-4 w-4" />
+            TorBox download
+          </button>
+        )}
+        {canCopyLink && (
+          <button
+            type="button"
+            onClick={() => onCopyLink!(stream)}
+            title="Copy TorBox CDN link (may expire; host refreshes when possible)"
+            className="btn-ghost whitespace-nowrap border border-white/10 text-xs text-slate-300"
+          >
+            <Copy className="h-4 w-4" />
+            Copy link
+          </button>
+        )}
+        {hasUrl && !canInstant && !canLocalSave && showLocalDownload && (
+          <span className="max-w-[10rem] text-center text-[10px] text-amber-300/90" title="Link may have expired — use Copy link or refresh streams">
+            Expired / uncached link
+          </span>
         )}
         {canCache && (
           <button

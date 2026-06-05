@@ -1,3 +1,5 @@
+import importlib
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -6,6 +8,24 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, _migrate_schema
 from app import db as db_module
 from app import models  # noqa: F401
+
+# Modules that do `from ..db import SessionLocal` keep a stale reference unless rebound.
+_SESSIONLOCAL_MODULES = (
+    "app.settings_store",
+    "app.auth",
+    "app.playqueue.manager",
+    "app.library.scanner",
+    "app.downloads.manager",
+    "app.routers.library_routes",
+    "app.routers.torbox_routes",
+)
+
+
+def _rebind_sessionlocal(factory) -> None:
+    db_module.SessionLocal = factory
+    for name in _SESSIONLOCAL_MODULES:
+        mod = importlib.import_module(name)
+        mod.SessionLocal = factory
 
 
 @pytest.fixture
@@ -17,7 +37,8 @@ def db():
     )
     Base.metadata.create_all(engine)
     db_module.engine = engine
-    db_module.SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    _rebind_sessionlocal(session_factory)
     _migrate_schema()
     Session = db_module.SessionLocal
     session = Session()

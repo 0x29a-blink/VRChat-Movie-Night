@@ -80,6 +80,10 @@ def _migrate_schema() -> None:
                 )
             if "watchlist_stats_excluded_at" not in user_cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN watchlist_stats_excluded_at DATETIME"))
+            if "allow_local_download" not in user_cols:
+                conn.execute(
+                    text("ALTER TABLE users ADD COLUMN allow_local_download BOOLEAN DEFAULT 0")
+                )
 
     if insp.has_table("user_ratings"):
         rating_cols = {c["name"] for c in insp.get_columns("user_ratings")}

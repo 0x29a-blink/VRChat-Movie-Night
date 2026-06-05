@@ -72,7 +72,7 @@ export function PreflightPanel({ onUpdate }: { onUpdate?: (status: PreflightStat
   };
 
   const mtxDetail = !status?.mediamtx_running
-    ? status?.hls_error || "Run start-movie-night.cmd or start-mediamtx.cmd (port 8888)"
+    ? status?.hls_error || "Run start-stack.cmd or mediamtx.cmd (port 8888)"
     : status.hls_stream_active
       ? "Relay responding — VRChat can load the stream"
       : status.hls_error || "Normal before Go live — start the stream from Queue & Player";

@@ -1,4 +1,5 @@
-import { Download, LayoutGrid, Loader2, Search as SearchIcon, Star } from "lucide-react";
+import { LayoutGrid, Loader2, Search as SearchIcon } from "lucide-react";
+import { useToast } from "./Toast";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { AddToWatchlistButton } from "./AddToWatchlist";
@@ -9,16 +10,16 @@ import { InLibraryChip } from "./InLibraryChip";
 import { ManualStreamForm } from "./ManualStreamForm";
 import { StreamResultsPanel } from "./StreamFiltersPanel";
 import { TitleMediaActions } from "./TitleMediaActions";
-import { StreamOpenLink, StreamNewTabButton, BROWSE_CARD } from "./StreamOpenLink";
+import { MediaSearchCard } from "./MediaSearchCard";
 import type { LibraryItem, SearchResult, StreamResult, TmdbEpisode } from "../types";
 import {
   clearStreamLaunchFromLocation,
   decodeTmdbStreamOpen,
   readStreamLaunchFromLocation,
-  streamOpenFromSearchResult,
   type StreamLaunch,
 } from "../streamOpenUrl";
 import { loadStreamFilters, saveStreamFilters } from "../streamFilters";
+import { copyStreamDownloadLink, saveStreamToPc } from "../localDownload";
 import { filterAndSortStreams, streamKey } from "../streamListUtils";
 import { isAnimeStremioId, animeProviderLabel } from "../animeIds";
 
@@ -84,10 +85,13 @@ function pickDefaultMetadataKey(r: SearchResult, providers: MetadataProvider[]):
 export function Search({
   initialStreamLaunch,
   onInitialStreamOpenHandled,
+  allowLocalDownload = false,
 }: {
   initialStreamLaunch?: StreamLaunch | null;
   onInitialStreamOpenHandled?: () => void;
+  allowLocalDownload?: boolean;
 }) {
+  const { push: pushToast } = useToast();
   const [mode, setMode] = useState<MoviesMode>("search");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -385,6 +389,10 @@ export function Search({
     }
 
     if (r.type === "series") {
+      if (!r.tmdb_id && r.stremio_id) {
+        await loadStreams(r, opts?.season, opts?.episode);
+        return;
+      }
       try {
         const d = await api.titleDetails(r.tmdb_id, r.type);
         await selectInitialSeason(
@@ -489,6 +497,8 @@ export function Search({
         res = await api.streamsStremio(videoId, r.stremio_id, s, ep);
       } else if (tmdbId) {
         res = await api.streams(tmdbId, r.type, s, ep);
+      } else if (r.stremio_id) {
+        res = await api.streamsStremio(r.stremio_id, r.stremio_id, s, ep);
       } else {
         throw new Error("No metadata source available for streams.");
       }
@@ -546,6 +556,30 @@ export function Search({
       setDownloadQueued(true);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Cache & download failed");
+    }
+  };
+
+  const saveStreamLocal = async (s: StreamResult) => {
+    setError("");
+    try {
+      await saveStreamToPc(s);
+      pushToast("Opening TorBox download in your browser", "success");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Could not open TorBox link";
+      setError(msg);
+      pushToast(msg, "error");
+    }
+  };
+
+  const copyStreamLink = async (s: StreamResult) => {
+    setError("");
+    try {
+      await copyStreamDownloadLink(s);
+      pushToast("TorBox download link copied", "success");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Could not copy link";
+      setError(msg);
+      pushToast(msg, "error");
     }
   };
 
@@ -619,7 +653,10 @@ export function Search({
 
       {mode === "browse" && (
         <div className={selected ? "hidden" : undefined}>
-          <Browse onPickTitle={(r) => pickTitle(r, { fromBrowse: true })} />
+          <Browse
+            onPickTitle={(r) => pickTitle(r, { fromBrowse: true })}
+            allowLocalDownload={allowLocalDownload}
+          />
         </div>
       )}
 
@@ -644,61 +681,9 @@ export function Search({
 
       {/* Title results */}
       {mode === "search" && !selected && results.length > 0 && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {results.map((r) => (
-            <div key={`${r.type}-${r.tmdb_id}`} className={BROWSE_CARD}>
-              <StreamOpenLink
-                params={streamOpenFromSearchResult(r)}
-                onOpenInPlace={() => pickTitle(r)}
-                className="block w-full text-left"
-              >
-                <div className="aspect-[2/3] w-full bg-ink-800">
-                  {r.poster ? (
-                    <img src={r.poster} alt={r.title} className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="grid h-full place-items-center text-slate-600">No image</div>
-                  )}
-                </div>
-                <div className="p-2.5">
-                  <div className="truncate text-sm font-medium">{r.title}</div>
-                  <div className="mt-0.5 flex items-center justify-between text-xs text-slate-400">
-                    <span>{r.year || "—"}</span>
-                    <span className="flex items-center gap-1">
-                      <Star className="h-3 w-3 text-amber-400" /> {r.rating?.toFixed(1)}
-                    </span>
-                  </div>
-                  <span className="chip mt-1 bg-white/5 text-slate-400">{r.type}</span>
-                </div>
-              </StreamOpenLink>
-              <div className="flex gap-1 border-t border-white/5 px-2 pb-2 pt-1">
-                <AddToWatchlistButton
-                  payload={{
-                    kind: r.type === "series" ? "series" : "movie",
-                    tmdb_id: r.tmdb_id,
-                    media_type: r.type,
-                    title: r.title,
-                    poster: r.poster,
-                    year: r.year,
-                    overview: r.overview,
-                  }}
-                  label="Watchlist"
-                  className="btn-ghost flex-1 justify-center py-1 text-[10px]"
-                />
-                {r.type === "movie" && (
-                  <>
-                    <StreamOpenLink
-                      params={streamOpenFromSearchResult(r)}
-                      onOpenInPlace={() => pickTitle(r)}
-                      title="Middle-click or Ctrl+click to open in a new tab"
-                      className="btn-primary flex-1 justify-center py-1 text-[10px]"
-                    >
-                      <Download className="h-3 w-3" /> Streams
-                    </StreamOpenLink>
-                    <StreamNewTabButton params={streamOpenFromSearchResult(r)} />
-                  </>
-                )}
-              </div>
-            </div>
+            <MediaSearchCard key={`${r.type}-${r.tmdb_id}-${r.title}`} result={r} onOpen={() => pickTitle(r)} />
           ))}
         </div>
       )}
@@ -879,6 +864,9 @@ export function Search({
               grabbed={grabbed}
               onGrabCached={grabCached}
               onGrabCache={grabCache}
+              showLocalDownload={allowLocalDownload}
+              onLocalDownload={saveStreamLocal}
+              onCopyLink={copyStreamLink}
               filters={{
                 searchText,
                 minRes,

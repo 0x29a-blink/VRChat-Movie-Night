@@ -1,5 +1,9 @@
 # VRChat Movie Night
 
+[![CI](https://github.com/0x29a-blink/VRChat-Movie-Night/actions/workflows/ci.yml/badge.svg)](https://github.com/0x29a-blink/VRChat-Movie-Night/actions/workflows/ci.yml)
+
+**New here?** See **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** for a first-time checklist, then use **`startup.cmd`** (setup menu) and **`start-stack.cmd`** (daily stack).
+
 A password-protected local web app for running VRChat movie nights with your friend group:
 
 - **Download** videos at max quality from three sources:
@@ -30,11 +34,21 @@ Webapp ──(obs-websocket :4455)──> OBS ──(RTMP :1935)──> MediaMTX
 
 ## Requirements
 
-- Python 3.x, Node.js + npm
-- `yt-dlp`, `ffmpeg`, `ffprobe`, `deno` on your PATH
+- **Python 3.10+** (for the web app)
+- **OBS 28+** with WebSocket enabled (port `4455`) — playback + RTMP stream
+- **Node.js + npm** — build the web UI once; optional for AIOStreams torrent search
+- **yt-dlp, ffmpeg, ffprobe** — install on PATH **or** bundle into `tools\` (see below)
+- **MediaMTX** — `MediaMTX\mediamtx.exe` or `scoop install mediamtx` (HLS tuned for lower delay — see `MediaMTX/LATENCY.md`)
+- `deno` is **optional** (`USE_DENO=false` in `.env` if missing)
 - `aria2c` is **optional** (not required; downloads use yt-dlp's native downloader)
-- OBS 28+ with **Tools → WebSocket Server Settings → Enable** (port `4455`)
-- MediaMTX for RTMP → HLS relay (`scoop install mediamtx` or place `mediamtx.exe` in `MediaMTX/`)
+
+### Bundled tools (recommended)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\fetch-tools.ps1
+```
+
+Or use **`startup.cmd`** → option 2. Binaries go in `tools\` and `MediaMTX\`; the app picks them up automatically.
 - **AIOStreams (self-hosted, recommended for torrent search):** Node.js **24+**, Git, and pnpm 11 (installed automatically by setup script). Public instances disable Torrentio and built-in search addons; your own instance unlocks them.
 
 ## First-time setup
@@ -52,7 +66,7 @@ Webapp ──(obs-websocket :4455)──> OBS ──(RTMP :1935)──> MediaMTX
    ```
    This clones [Viren070/AIOStreams](https://github.com/Viren070/AIOStreams), runs `pnpm install`, `pnpm run build`, and creates `AIOStreams\.env` with a generated `SECRET_KEY`. Requires Node.js 24+ and Git on PATH.
 
-   Start the addon (or use `start-movie-night.cmd`, which launches it automatically once built):
+   Start the addon (or use `start-stack.cmd`, which launches it automatically once built):
    ```
    AIOStreams\start-aiostreams.cmd
    ```
@@ -69,9 +83,9 @@ Webapp ──(obs-websocket :4455)──> OBS ──(RTMP :1935)──> MediaMTX
   ```
 4. Start everything:
   ```
-   start-movie-night.cmd
+   start-stack.cmd
   ```
-   This opens MediaMTX (port 8888), AIOStreams (port 3000, if built), and the web app (port 8000) in separate windows.
+   One console: MediaMTX + optional AIOStreams + API (prefixed logs). Closing the window or Ctrl+C stops all services. If MediaMTX ever lingers in the background, run `stop-stack.cmd`. Setup menu: `startup.cmd`.
 5. Open **[http://localhost:8000](http://localhost:8000)** (or `http://<your-ip>:8000` from another machine) and sign in.
 6. Open the **Movie Night** sidebar tab and confirm the checklist is green before guests arrive.
 
@@ -94,12 +108,14 @@ Webapp ──(obs-websocket :4455)──> OBS ──(RTMP :1935)──> MediaMTX
 2. Settings → Stream → Service `Custom`, Server `rtmp://localhost:1935/live`,
   Stream Key `vrstream` (so the HLS URL is `.../live/vrstream/index.m3u8`).
 3. Enable Tools → WebSocket Server (port `4455`, password matching `.env`).
-4. In the app's **Queue & Player** tab, click **Go live** (this starts the OBS stream once),
-  then play from your queue. Keep OBS streaming the whole session.
+4. In the app **Settings → OBS**, click **Test connection**, then **Apply stream defaults** if offered
+   (sets Custom RTMP `rtmp://localhost:1935/live` / key `vrstream` and can create the `VRStream` media source).
+5. In **Queue & Player**, click **Go live**, then play from your queue. Keep OBS streaming the whole session.
 
 ## Daily use
 
-- `start-movie-night.cmd` → open the site → sign in → check **Movie Night** tab.
+- `start-stack.cmd` → open the site → sign in → check **Movie Night** tab.
+- `stop-stack.cmd` → kill stray MediaMTX/AIOStreams if a stack window was closed with X.
 - A red dot on **Movie Night** in the sidebar means something needs attention (OBS offline, MediaMTX
 down, missing tools, etc.). HLS inactive before Go live is normal and does not trigger the dot.
 - **Get Videos** tab: paste a YouTube/M3U8 link, or search a movie/show and pick a stream.
@@ -120,7 +136,7 @@ run-dev.cmd
 
 Opens the API (`:8000`, `--reload`) and the Vite dev server (`:5173`). Use
 **[http://localhost:5173](http://localhost:5173)** for the UI; Vite proxies `/api` and `/ws` to the backend.
-You still need MediaMTX running separately (`start-mediamtx.cmd` or `start-movie-night.cmd`).
+You still need MediaMTX for HLS tests (`start-stack.cmd` or `mediamtx.cmd` for MediaMTX alone).
 
 ## Project structure
 
@@ -145,10 +161,13 @@ media_server_player/
   library/            youtube/  m3u8/  torrents/   (downloaded files)
   MediaMTX/           MediaMTX config (install mediamtx via scoop or releases locally)
   AIOStreams/         Self-hosted AIOStreams from source (setup-aiostreams.cmd)
-  start-movie-night.cmd   MediaMTX + AIOStreams + web app (recommended)
-  start.cmd           web app only
-  start-mediamtx.cmd  MediaMTX only
-  build-frontend.cmd  run-dev.cmd
+  start-stack.cmd       Full stack (primary)
+  stop-stack.cmd        Stop leftover MediaMTX / stack children
+  startup.cmd           Setup menu (checks, tools, build UI)
+  api-backend.cmd       API only (no MediaMTX)
+  mediamtx.cmd          MediaMTX only (debug)
+  scripts/              api-only, dev, preflight, stop-stack
+  build-frontend.cmd    run-dev.cmd
   yt_downloader/      legacy clipboard helper (see below)
 ```
 
@@ -174,8 +193,8 @@ the wrong address for the VRChat HLS URL.
 size, cached-only) to find the best one fast. Self-hosting (`AIOStreams\setup-aiostreams.cmd`) enables Torrentio and built-in indexers that public instances disable.
 - WebSocket events refresh the library and watchlist when downloads finish or library items change;
   toasts notify when linked downloads complete. The sidebar shows live-update connection status.
-- Run `build-frontend.cmd` before `start.cmd` in production — `frontend/dist/` is not committed; CI builds it on push.
-- CI runs on every push/PR to `main` (backend pytest + frontend typecheck/build).
+- Run `build-frontend.cmd` before `api-backend.cmd` or `start-stack.cmd` in production — `frontend/dist/` is not committed; CI builds it on push.
+- CI runs on every push/PR to `main` (backend pytest, frontend typecheck/build). Tests do not need a local `backend/data/app.db`.
 
 ## Legal notice
 

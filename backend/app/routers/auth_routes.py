@@ -42,11 +42,14 @@ def logout(response: Response):
 
 
 @router.get("/me")
-def me(request: Request):
-    user = auth.is_authenticated(request)
-    if not user:
+def me(request: Request, db: Session = Depends(get_db)):
+    cu = auth.is_authenticated(request)
+    if not cu:
         return {"authenticated": False, "user": None}
-    return {"authenticated": True, "user": user.to_dict()}
+    row = db.get(User, cu.id)
+    if not row:
+        return {"authenticated": False, "user": None}
+    return {"authenticated": True, "user": row.to_dict()}
 
 
 @router.post("/password")
