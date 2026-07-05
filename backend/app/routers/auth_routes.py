@@ -4,7 +4,9 @@ from sqlalchemy.orm import Session
 
 from .. import auth
 from ..db import get_db
+from ..events import record_event
 from ..models import User
+from ..permissions import capabilities_for
 
 router = APIRouter(prefix="/api", tags=["auth"])
 
@@ -15,7 +17,7 @@ class LoginBody(BaseModel):
 
 
 class PasswordBody(BaseModel):
-    new_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
 
 
 def _client_ip(request: Request) -> str:
@@ -29,15 +31,15 @@ def login(body: LoginBody, request: Request, response: Response, db: Session = D
         key=auth.COOKIE_NAME,
         value=token,
         max_age=auth.MAX_AGE,
-        httponly=True,
-        samesite="lax",
+        **auth.session_cookie_kwargs(request),
     )
+    record_event("login", body.username.strip().lower())
     return {"ok": True}
 
 
 @router.post("/logout")
-def logout(response: Response):
-    response.delete_cookie(auth.COOKIE_NAME)
+def logout(request: Request, response: Response):
+    response.delete_cookie(auth.COOKIE_NAME, **auth.session_cookie_kwargs(request))
     return {"ok": True}
 
 
@@ -49,7 +51,9 @@ def me(request: Request, db: Session = Depends(get_db)):
     row = db.get(User, cu.id)
     if not row:
         return {"authenticated": False, "user": None}
-    return {"authenticated": True, "user": row.to_dict()}
+    data = row.to_dict()
+    data["capabilities"] = capabilities_for(row)
+    return {"authenticated": True, "user": data}
 
 
 @router.post("/password")
@@ -62,5 +66,6 @@ def change_password(
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
     row.password_hash = auth.hash_password(body.new_password)
+    row.session_version = int(row.session_version or 0) + 1
     db.commit()
     return {"ok": True}

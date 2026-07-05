@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { copyTextToClipboard } from "./clipboard";
 import type { BrowseItem, StreamResult } from "./types";
 
 /**
@@ -6,7 +7,7 @@ import type { BrowseItem, StreamResult } from "./types";
  * then open it in the browser. No file bytes are streamed from the Movie Night PC.
  */
 
-export function openTorboxDownloadUrl(url: string): void {
+function openTorboxDownloadUrl(url: string): void {
   const a = document.createElement("a");
   a.href = url;
   a.target = "_blank";
@@ -16,7 +17,7 @@ export function openTorboxDownloadUrl(url: string): void {
   a.remove();
 }
 
-export async function resolveStreamTorboxUrl(stream: StreamResult): Promise<string> {
+async function resolveStreamTorboxUrl(stream: StreamResult): Promise<string> {
   const res = await api.torboxDownloadLink({
     url: stream.url,
     magnet: stream.magnet,
@@ -29,27 +30,6 @@ export async function resolveStreamTorboxUrl(stream: StreamResult): Promise<stri
     size_bytes: stream.size_bytes || undefined,
   });
   return res.url;
-}
-
-async function copyTextToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch {
-      /* fall through */
-    }
-  }
-  const ta = document.createElement("textarea");
-  ta.value = text;
-  ta.setAttribute("readonly", "");
-  ta.style.position = "fixed";
-  ta.style.left = "-9999px";
-  document.body.appendChild(ta);
-  ta.select();
-  const ok = document.execCommand("copy");
-  ta.remove();
-  if (!ok) throw new Error("Could not copy to clipboard");
 }
 
 export async function saveStreamToPc(stream: StreamResult): Promise<void> {

@@ -1,11 +1,11 @@
 import { Check, Download, FolderOpen, HardDriveDownload, Layers, Loader2, Search, Sparkles } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { saveBrowseTorboxItemToPc } from "../localDownload";
 import { useToast } from "./Toast";
 import { isAnimeStremioId } from "../animeIds";
 import { AddToWatchlistButton, type WatchlistAddPayload } from "./AddToWatchlist";
-import { StreamOpenLink, StreamNewTabButton, BROWSE_CARD } from "./StreamOpenLink";
+import { StreamOpenLink, BROWSE_CARD } from "./StreamOpenLink";
 import type { BrowseItem, CatalogInfo, SearchResult, TmdbCollectionSummary } from "../types";
 import { streamOpenFromBrowseItem, streamOpenFromSearchResult, type StreamOpenParams } from "../streamOpenUrl";
 
@@ -27,6 +27,20 @@ const COLLECTION_PRESETS = [
 ];
 
 type BrowseSource = "collections" | "aiostreams";
+
+type TitleGridRow = {
+  key: string;
+  title: string;
+  year: string;
+  poster: string;
+  rating: number;
+  badge?: string;
+  watchlist?: WatchlistAddPayload;
+  openParams?: StreamOpenParams;
+  onOpen: () => void;
+  onTorboxDownload?: () => void;
+  torboxDownloadBusy?: boolean;
+};
 
 function watchlistFromSearchResult(m: SearchResult): WatchlistAddPayload {
   return {
@@ -257,6 +271,141 @@ function CatalogPicker({
   );
 }
 
+function TitleCardBody({ row }: { row: TitleGridRow }) {
+  return (
+    <>
+      <div className="aspect-[2/3] w-full bg-ink-800">
+        {row.poster ? (
+          <img src={row.poster} alt={row.title} className="h-full w-full object-cover" />
+        ) : (
+          <div className="grid h-full place-items-center text-slate-600">No image</div>
+        )}
+      </div>
+      <div className="p-2.5">
+        <div className="truncate text-sm font-medium">{row.title}</div>
+        <div className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-400">
+          {row.badge && <span className="chip bg-brand-500/15 text-brand-300">{row.badge}</span>}
+          <span>{row.year || "—"}</span>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function TitleOpenTarget({
+  row,
+  resolving,
+  children,
+}: {
+  row: TitleGridRow;
+  resolving: boolean;
+  children: ReactNode;
+}) {
+  if (row.openParams) {
+    return (
+      <StreamOpenLink
+        params={row.openParams}
+        onOpenInPlace={row.onOpen}
+        disabled={resolving}
+        className="block w-full text-left no-underline text-inherit"
+      >
+        {children}
+      </StreamOpenLink>
+    );
+  }
+
+  return (
+    <button type="button" onClick={row.onOpen} disabled={resolving} className="block w-full text-left">
+      {children}
+    </button>
+  );
+}
+
+function TitleCardActions({ row, resolving }: { row: TitleGridRow; resolving: boolean }) {
+  if (!row.openParams && !row.onTorboxDownload) return null;
+
+  return (
+    <div
+      className={`grid gap-1 border-t border-white/5 p-2 ${
+        row.onTorboxDownload && row.openParams ? "grid-cols-2" : "grid-cols-1"
+      }`}
+    >
+      {row.onTorboxDownload && (
+        <button
+          type="button"
+          disabled={!!row.torboxDownloadBusy || resolving}
+          onClick={(e) => {
+            e.stopPropagation();
+            row.onTorboxDownload?.();
+          }}
+          className="btn-ghost col-span-full min-w-0 justify-center gap-1 py-1.5 text-[10px] text-sky-300"
+          title="Open TorBox CDN link in browser (already on your TorBox account)"
+        >
+          {row.torboxDownloadBusy ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <HardDriveDownload className="h-3 w-3" />
+          )}
+          TorBox download
+        </button>
+      )}
+      {row.openParams && (
+        <>
+          {row.watchlist ? (
+            <AddToWatchlistButton
+              payload={row.watchlist}
+              label="Watchlist"
+              className="btn-ghost min-w-0 justify-center py-1 text-[10px]"
+            />
+          ) : (
+            <div />
+          )}
+          <StreamOpenLink
+            params={row.openParams}
+            onOpenInPlace={row.onOpen}
+            disabled={resolving}
+            title="Middle-click or Ctrl+click to open in a new tab"
+            className="btn-primary min-w-0 justify-center gap-1 py-1 text-[10px] no-underline"
+          >
+            <Download className="h-3 w-3 shrink-0" /> Streams
+          </StreamOpenLink>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TitleGrid({ rows, resolving }: { rows: TitleGridRow[]; resolving: boolean }) {
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      {rows.map((row) => (
+        <div key={row.key} className={BROWSE_CARD}>
+          <TitleOpenTarget row={row} resolving={resolving}>
+            <TitleCardBody row={row} />
+          </TitleOpenTarget>
+          <TitleCardActions row={row} resolving={resolving} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function titleRowsFromSearchResults(
+  movies: SearchResult[],
+  onPickTitle: (result: SearchResult) => void
+): TitleGridRow[] {
+  return movies.map((movie) => ({
+    key: `m-${movie.tmdb_id}`,
+    title: movie.title,
+    year: movie.year,
+    poster: movie.poster,
+    rating: movie.rating,
+    openParams: streamOpenFromSearchResult(movie),
+    watchlist: watchlistFromSearchResult(movie),
+    onOpen: () => onPickTitle(movie),
+  }));
+}
+
 export function Browse({
   onPickTitle,
   allowLocalDownload = false,
@@ -465,125 +614,6 @@ export function Browse({
     }
   };
 
-  const TitleGrid = ({
-    rows,
-  }: {
-    rows: {
-      key: string;
-      title: string;
-      year: string;
-      poster: string;
-      rating: number;
-      badge?: string;
-      watchlist?: WatchlistAddPayload;
-      openParams?: StreamOpenParams;
-      onOpen: () => void;
-      onTorboxDownload?: () => void;
-      torboxDownloadBusy?: boolean;
-    }[];
-  }) => (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-      {rows.map((r) => (
-        <div key={r.key} className={BROWSE_CARD}>
-          {r.openParams ? (
-            <StreamOpenLink
-              params={r.openParams}
-              onOpenInPlace={r.onOpen}
-              disabled={resolving}
-              className="block w-full text-left no-underline text-inherit"
-            >
-              <div className="aspect-[2/3] w-full bg-ink-800">
-                {r.poster ? (
-                  <img src={r.poster} alt={r.title} className="h-full w-full object-cover" />
-                ) : (
-                  <div className="grid h-full place-items-center text-slate-600">No image</div>
-                )}
-              </div>
-              <div className="p-2.5">
-                <div className="truncate text-sm font-medium">{r.title}</div>
-                <div className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-400">
-                  {r.badge && <span className="chip bg-brand-500/15 text-brand-300">{r.badge}</span>}
-                  <span>{r.year || "—"}</span>
-                </div>
-              </div>
-            </StreamOpenLink>
-          ) : (
-            <button
-              type="button"
-              onClick={r.onOpen}
-              disabled={resolving}
-              className="block w-full text-left"
-            >
-              <div className="aspect-[2/3] w-full bg-ink-800">
-                {r.poster ? (
-                  <img src={r.poster} alt={r.title} className="h-full w-full object-cover" />
-                ) : (
-                  <div className="grid h-full place-items-center text-slate-600">No image</div>
-                )}
-              </div>
-              <div className="p-2.5">
-                <div className="truncate text-sm font-medium">{r.title}</div>
-                <div className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-400">
-                  {r.badge && <span className="chip bg-brand-500/15 text-brand-300">{r.badge}</span>}
-                  <span>{r.year || "—"}</span>
-                </div>
-              </div>
-            </button>
-          )}
-          {(r.openParams || r.onTorboxDownload) && (
-            <div
-              className={`grid gap-1 border-t border-white/5 p-2 ${
-                r.onTorboxDownload && r.openParams ? "grid-cols-2" : "grid-cols-1"
-              }`}
-            >
-              {r.onTorboxDownload && (
-                <button
-                  type="button"
-                  disabled={!!r.torboxDownloadBusy || resolving}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    r.onTorboxDownload?.();
-                  }}
-                  className="btn-ghost col-span-full min-w-0 justify-center gap-1 py-1.5 text-[10px] text-sky-300"
-                  title="Open TorBox CDN link in browser (already on your TorBox account)"
-                >
-                  {r.torboxDownloadBusy ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <HardDriveDownload className="h-3 w-3" />
-                  )}
-                  TorBox download
-                </button>
-              )}
-              {r.openParams && (
-                <>
-                  {r.watchlist ? (
-                    <AddToWatchlistButton
-                      payload={r.watchlist}
-                      label="Watchlist"
-                      className="btn-ghost min-w-0 justify-center py-1 text-[10px]"
-                    />
-                  ) : (
-                    <div />
-                  )}
-                  <StreamOpenLink
-                    params={r.openParams}
-                    onOpenInPlace={r.onOpen}
-                    disabled={resolving}
-                    title="Middle-click or Ctrl+click to open in a new tab"
-                    className="btn-primary min-w-0 justify-center gap-1 py-1 text-[10px] no-underline"
-                  >
-                    <Download className="h-3 w-3 shrink-0" /> Streams
-                  </StreamOpenLink>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">
@@ -711,16 +741,8 @@ export function Browse({
                 <AddToWatchlistButton payload={watchlistFromCollection(activeCollection)} label="Add collection" />
               </div>
               <TitleGrid
-                rows={activeCollection.movies.map((m) => ({
-                  key: `m-${m.tmdb_id}`,
-                  title: m.title,
-                  year: m.year,
-                  poster: m.poster,
-                  rating: m.rating,
-                  openParams: streamOpenFromSearchResult(m),
-                  watchlist: watchlistFromSearchResult(m),
-                  onOpen: () => onPickTitle(m),
-                }))}
+                resolving={resolving}
+                rows={titleRowsFromSearchResults(activeCollection.movies, onPickTitle)}
               />
             </div>
           )}
@@ -780,16 +802,8 @@ export function Browse({
                 />
               </div>
               <TitleGrid
-                rows={activeAioCollection.movies.map((m) => ({
-                  key: `m-${m.tmdb_id}`,
-                  title: m.title,
-                  year: m.year,
-                  poster: m.poster,
-                  rating: m.rating,
-                  openParams: streamOpenFromSearchResult(m),
-                  watchlist: watchlistFromSearchResult(m),
-                  onOpen: () => onPickTitle(m),
-                }))}
+                resolving={resolving}
+                rows={titleRowsFromSearchResults(activeAioCollection.movies, onPickTitle)}
               />
             </div>
           )}
@@ -858,6 +872,7 @@ export function Browse({
                     </p>
                   )}
                   <TitleGrid
+                    resolving={resolving}
                     rows={items.map((item, i) => {
                       const isCollection = item.kind === "collection";
                       const watchlist = watchlistFromBrowseItem(item);

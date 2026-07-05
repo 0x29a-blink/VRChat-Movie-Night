@@ -58,7 +58,7 @@ async def streams_stremio(
     except RuntimeError as exc:
         raise HTTPException(400, str(exc)) from exc
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"AIOStreams request failed: {exc}") from exc
+        raise HTTPException(502, aiostreams.format_request_error(exc)) from exc
 
 
 @router.get("/streams")
@@ -82,10 +82,14 @@ async def streams(
 
         results: list[dict] = []
         resolved_id = video_ids[0] if video_ids else ""
+        last_err: Exception | None = None
         for video_id in video_ids:
             try:
                 batch = await aiostreams.fetch_streams(stream_type, video_id)
-            except httpx.HTTPError:
+            except RuntimeError:
+                raise
+            except httpx.HTTPError as exc:
+                last_err = exc
                 continue
             if batch:
                 return {"imdb_id": imdb_id or None, "video_id": video_id, "streams": batch}
@@ -95,8 +99,11 @@ async def streams(
         if not video_ids:
             raise HTTPException(404, "No IMDB id found for this title")
 
+        if not results and last_err is not None:
+            raise HTTPException(502, aiostreams.format_request_error(last_err)) from last_err
+
         return {"imdb_id": imdb_id or None, "video_id": resolved_id, "streams": results}
     except RuntimeError as exc:
         raise HTTPException(400, str(exc))
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"AIOStreams request failed: {exc}")
+        raise HTTPException(502, aiostreams.format_request_error(exc))

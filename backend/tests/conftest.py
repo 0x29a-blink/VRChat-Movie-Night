@@ -5,9 +5,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.db import Base, _migrate_schema
 from app import db as db_module
 from app import models  # noqa: F401
+from app.db import Base, _migrate_schema
 
 # Modules that do `from ..db import SessionLocal` keep a stale reference unless rebound.
 _SESSIONLOCAL_MODULES = (
@@ -18,6 +18,7 @@ _SESSIONLOCAL_MODULES = (
     "app.downloads.manager",
     "app.routers.library_routes",
     "app.routers.torbox_routes",
+    "app.events",
 )
 
 

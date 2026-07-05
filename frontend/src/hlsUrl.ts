@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { copyTextToClipboard } from "./clipboard";
 
 /** VRChat HLS URL for the OBS → MediaMTX stream (port 8888, not the web app on 8000). */
 export function buildHlsUrl(host?: string): string {
@@ -22,6 +23,6 @@ export async function resolveHlsUrl(): Promise<string> {
 
 export async function copyHlsUrl(): Promise<string> {
   const url = await resolveHlsUrl();
-  await navigator.clipboard.writeText(url);
+  await copyTextToClipboard(url);
   return url;
 }

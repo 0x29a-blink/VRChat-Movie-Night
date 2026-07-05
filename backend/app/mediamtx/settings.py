@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Any
 
 import httpx
 
 from ..config import PROJECT_ROOT
 from ..network_utils import MTX_API_PORT
-from ..settings_store import get as setting_get, set_value as setting_set
+from ..settings_store import get as setting_get
+from ..settings_store import set_value as setting_set
 
 MEDIAMTX_YML = PROJECT_ROOT / "MediaMTX" / "mediamtx.yml"
 PRESET_SETTING_KEY = "mediamtx_preset"

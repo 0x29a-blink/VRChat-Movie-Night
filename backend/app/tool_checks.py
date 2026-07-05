@@ -3,6 +3,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import settings_store
 from .config import settings
 
 
@@ -45,7 +46,7 @@ async def check_all_tools() -> list[dict[str, str | bool]]:
         ("ffmpeg", [settings.ffmpeg_path, "-version"]),
         ("ffprobe", [settings.ffprobe_path, "-version"]),
     ]
-    if settings.use_deno:
+    if bool(settings_store.get("use_deno", settings.use_deno)):
         specs.append(("deno", ["deno", "--version"]))
 
     results = await asyncio.gather(*[_check_tool(name, cmd) for name, cmd in specs])

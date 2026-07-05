@@ -13,12 +13,12 @@ router = APIRouter(prefix="/api/users", tags=["users"], dependencies=[Depends(au
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=2, max_length=32)
-    password: str = Field(min_length=1)
+    password: str = Field(min_length=8)
     role: str = "member"
 
 
 class ResetPasswordBody(BaseModel):
-    password: str = Field(min_length=1)
+    password: str = Field(min_length=8)
 
 
 class WatchlistStatsExcludedBody(BaseModel):
@@ -50,7 +50,7 @@ def create_user(body: UserCreate, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
-    return {"user": user.to_dict(), "password": body.password}
+    return {"user": user.to_dict()}
 
 
 @router.delete("/{user_id}")
@@ -73,8 +73,9 @@ def reset_password(user_id: int, body: ResetPasswordBody, db: Session = Depends(
     if not user:
         raise HTTPException(404, "User not found")
     user.password_hash = auth.hash_password(body.password)
+    user.session_version = int(user.session_version or 0) + 1
     db.commit()
-    return {"ok": True, "password": body.password}
+    return {"ok": True}
 
 
 @router.put("/{user_id}/watchlist-stats-excluded")

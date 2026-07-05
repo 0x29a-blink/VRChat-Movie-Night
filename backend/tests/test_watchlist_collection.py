@@ -2,7 +2,6 @@ from unittest.mock import AsyncMock, patch
 
 from app.models import WatchlistItem
 
-
 MOCK_COLLECTION = {
     "collection_id": 86311,
     "name": "The Avengers Collection",

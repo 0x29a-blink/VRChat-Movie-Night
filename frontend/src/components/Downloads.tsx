@@ -4,6 +4,7 @@ import { api } from "../api";
 import type { Job, UserInfo } from "../types";
 import { canLocalDownload } from "../localDownload";
 import type { StreamLaunch } from "../streamOpenUrl";
+import { ConfirmModal } from "./ConfirmModal";
 import { DownloadJobCard } from "./DownloadJobCard";
 import { Search } from "./Search";
 
@@ -14,6 +15,8 @@ const TABS: { id: Tab; label: string; icon: typeof Youtube }[] = [
   { id: "m3u8", label: "M3U8 / Stream", icon: Link2 },
   { id: "search", label: "Movies & Shows", icon: Film },
 ];
+
+const ACTIVE_STATUSES = new Set<Job["status"]>(["queued", "caching", "downloading"]);
 
 export function Downloads({
   jobs,
@@ -31,15 +34,29 @@ export function Downloads({
   user: UserInfo;
 }) {
   const [tab, setTab] = useState<Tab>(() => (initialStreamLaunch ? "search" : "youtube"));
+  const [clearing, setClearing] = useState<"completed" | "failed" | null>(null);
+  const [clearBusy, setClearBusy] = useState(false);
 
   useEffect(() => {
     if (initialStreamLaunch) setTab("search");
   }, [initialStreamLaunch]);
 
-  const active = jobs.filter(
-    (j) => j.status === "downloading" || j.status === "queued" || j.status === "caching"
-  );
-  const finished = jobs.filter((j) => !["downloading", "queued"].includes(j.status));
+  const active = jobs.filter((j) => ACTIVE_STATUSES.has(j.status));
+  const finished = jobs.filter((j) => !ACTIVE_STATUSES.has(j.status));
+  const hasCompleted = finished.some((j) => j.status === "completed");
+  const hasFailed = finished.some((j) => j.status === "failed");
+
+  const doClear = async (statuses: string[]) => {
+    setClearBusy(true);
+    try {
+      const res = await api.clearDownloads(statuses);
+      for (const id of res.removed) onJobRemoved?.(id);
+      onChanged();
+    } finally {
+      setClearBusy(false);
+      setClearing(null);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -92,12 +109,47 @@ export function Downloads({
 
       {finished.length > 0 && (
         <section className="space-y-3">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">History</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">History</h2>
+            <div className="flex gap-2">
+              {hasCompleted && (
+                <button
+                  onClick={() => setClearing("completed")}
+                  className="btn-ghost px-2 py-1 text-xs"
+                >
+                  Clear completed
+                </button>
+              )}
+              {hasFailed && (
+                <button
+                  onClick={() => setClearing("failed")}
+                  className="btn-ghost px-2 py-1 text-xs"
+                >
+                  Clear failed
+                </button>
+              )}
+            </div>
+          </div>
           {finished.map((j) => (
             <DownloadJobCard key={j.id} job={j} onRemoved={onJobRemoved} />
           ))}
         </section>
       )}
+
+      <ConfirmModal
+        open={clearing !== null}
+        title={clearing === "completed" ? "Clear completed downloads?" : "Clear failed downloads?"}
+        message={
+          clearing === "completed"
+            ? "This removes all completed downloads from history. Files already saved to your library are not affected."
+            : "This removes all failed downloads from history."
+        }
+        confirmLabel="Clear"
+        danger
+        busy={clearBusy}
+        onConfirm={() => clearing && doClear([clearing])}
+        onCancel={() => setClearing(null)}
+      />
     </div>
   );
 }

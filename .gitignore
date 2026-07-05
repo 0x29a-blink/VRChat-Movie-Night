@@ -1,3 +1,6 @@
+# Local logs
+move-sync-log.txt
+
 # Environment and secrets
 backend/.env
 backend/.venv/
@@ -35,6 +38,15 @@ tools/*.dll
 
 # Stack runtime (PIDs written by run_stack.py)
 .stack/
+
+# Cloudflare Tunnel (personal credentials — copy from examples)
+cloudflare/.env
+cloudflare/config.yml
+cloudflare/credentials.json
+cloudflare/*.json
+!cloudflare/config.yml.example
+!cloudflare/.env.example
+cloudflare/node_modules/
 
 # AIOStreams self-hosted instance (clone + runtime data — do not commit)
 AIOStreams/repo/

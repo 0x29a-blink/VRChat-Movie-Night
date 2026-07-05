@@ -13,9 +13,10 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type Dispatch, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { readNavFromLocation, writeNavToLocation, type AppTab } from "./appNav";
+import { useAppRealtime } from "./appRealtime";
+import { readNavFromLocation, writeNavToLocation, type AppTab, type WatchlistSection } from "./appNav";
 import { Downloads } from "./components/Downloads";
 import { Library } from "./components/Library";
 import { Login } from "./components/Login";
@@ -28,11 +29,12 @@ import { ToastProvider, useToast } from "./components/Toast";
 import { WatchlistAddProvider } from "./watchlistAddModal";
 import { Watchlist } from "./components/Watchlist";
 import { fmtMs } from "./format";
-import type { Job, PlayerState, QueueSnapshot, UserInfo } from "./types";
+import type { AppEvent, Job, MovieNightSession, PlayerState, QueueSnapshot, UserInfo } from "./types";
 import { clearStreamLaunchFromLocation, readStreamLaunchFromLocation, type StreamLaunch } from "./streamOpenUrl";
-import { useWebSocket, type WsStatus } from "./ws";
+import type { WsStatus } from "./ws";
 
 type Tab = AppTab;
+type ObsState = { connected: boolean; streaming: boolean };
 
 const NAV: { id: Tab; label: string; icon: typeof Download }[] = [
   { id: "downloads", label: "Get Videos", icon: Download },
@@ -53,18 +55,22 @@ function AppShell() {
     readStreamLaunchFromLocation() ? "downloads" : initialNav.tab
   );
   const [watchlistGroupId, setWatchlistGroupId] = useState<number | undefined>(initialNav.watchlistGroupId);
+  const [watchlistSection, setWatchlistSection] = useState<WatchlistSection>(
+    initialNav.watchlistSection ?? "to_watch"
+  );
 
   const [jobs, setJobs] = useState<Job[]>([]);
   const [queue, setQueue] = useState<QueueSnapshot>({ items: [], current_index: -1, current: null });
   const [player, setPlayer] = useState<PlayerState | null>(null);
+  const [activityEvent, setActivityEvent] = useState<AppEvent | null>(null);
+  const [session, setSession] = useState<MovieNightSession | null>(null);
   const [libVersion, setLibVersion] = useState(0);
   const [watchlistVersion, setWatchlistVersion] = useState(0);
-  const [obs, setObs] = useState<{ connected: boolean; streaming: boolean }>({
+  const [libraryScanning, setLibraryScanning] = useState(false);
+  const [obs, setObs] = useState<ObsState>({
     connected: false,
     streaming: false,
   });
-  const jobStatusRef = useRef<Record<string, string>>({});
-  const linkedToastRef = useRef<{ title: string; timer: number } | null>(null);
   const [pendingStreamLaunch, setPendingStreamLaunch] = useState<StreamLaunch | null>(() =>
     readStreamLaunchFromLocation()
   );
@@ -79,9 +85,13 @@ function AppShell() {
       setNavOpen(false);
       const gid = next === "watchlist" ? (groupId ?? watchlistGroupId) : undefined;
       if (groupId != null) setWatchlistGroupId(groupId);
-      writeNavToLocation({ tab: next, watchlistGroupId: gid });
+      writeNavToLocation({
+        tab: next,
+        watchlistGroupId: gid,
+        watchlistSection: next === "watchlist" ? watchlistSection : undefined,
+      });
     },
-    [watchlistGroupId]
+    [watchlistGroupId, watchlistSection]
   );
 
   const refreshMe = useCallback(() => {
@@ -106,6 +116,7 @@ function AppShell() {
     api.queue().then(setQueue).catch(() => {});
     api.obsStatus().then(setObs).catch(() => {});
     api.playerStatus().then(setPlayer).catch(() => {});
+    api.sessionCurrent().then((r) => setSession(r.active)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -128,11 +139,18 @@ function AppShell() {
     return () => clearInterval(t);
   }, [authed]);
 
+  const checklistBusyRef = useRef(false);
+
   const refreshChecklistIssues = useCallback(() => {
+    if (document.hidden || checklistBusyRef.current) return;
+    checklistBusyRef.current = true;
     api
       .preflight()
       .then((s) => setChecklistIssues((s.issues ?? []).length))
-      .catch(() => setChecklistIssues(1));
+      .catch(() => setChecklistIssues(1))
+      .finally(() => {
+        checklistBusyRef.current = false;
+      });
   }, []);
 
   useEffect(() => {
@@ -142,57 +160,19 @@ function AppShell() {
     return () => clearInterval(t);
   }, [authed, refreshChecklistIssues]);
 
-  const wsStatus = useWebSocket(authed === true, (event, data) => {
-    if (event === "download_update") {
-      const prevStatus = jobStatusRef.current[data.id];
-      jobStatusRef.current[data.id] = data.status;
-      if (data.status === "completed" && prevStatus && prevStatus !== "completed") {
-        if (data.link_tmdb_id) {
-          if (linkedToastRef.current) window.clearTimeout(linkedToastRef.current.timer);
-          linkedToastRef.current = {
-            title: data.title,
-            timer: window.setTimeout(() => {
-              pushToast(`Download complete: ${data.title}`, "success");
-              linkedToastRef.current = null;
-            }, 2500),
-          };
-        } else {
-          pushToast(`Download complete: ${data.title}`, "success");
-        }
-        setLibVersion((v) => v + 1);
-        setWatchlistVersion((v) => v + 1);
-      } else if (data.status === "failed" && prevStatus && prevStatus !== "failed") {
-        pushToast(`Download failed: ${data.title}`, "error");
-      }
-      setJobs((prev) => {
-        const idx = prev.findIndex((j) => j.id === data.id);
-        if (idx === -1) return [data, ...prev];
-        const copy = [...prev];
-        copy[idx] = data;
-        return copy;
-      });
-    } else if (event === "download_removed") {
-      delete jobStatusRef.current[data.id];
-      setJobs((prev) => prev.filter((j) => j.id !== data.id));
-    } else if (event === "queue_update") {
-      setQueue(data);
-    } else if (event === "player_update") {
-      setPlayer(data);
-      if (data?.current_index !== undefined)
-        setQueue((q) => ({ ...q, current_index: data.current_index, current: data.current }));
-    } else if (event === "library_update") {
-      setLibVersion((v) => v + 1);
-      setWatchlistVersion((v) => v + 1);
-      if (data?.reason === "download_linked" && data?.title) {
-        if (linkedToastRef.current) {
-          window.clearTimeout(linkedToastRef.current.timer);
-          linkedToastRef.current = null;
-          pushToast(`Download complete & linked: ${data.title}`, "success");
-        } else {
-          pushToast(`Linked to library: ${data.title}`, "success");
-        }
-      }
-    }
+  const wsStatus = useAppRealtime({
+    authed: authed === true,
+    pushToast,
+    refreshAll,
+    refreshChecklistIssues,
+    setJobs,
+    setQueue,
+    setPlayer,
+    setLibVersion,
+    setWatchlistVersion,
+    setLibraryScanning,
+    onActivityEvent: setActivityEvent,
+    onSessionUpdate: (s) => setSession(s.state === "ended" ? null : s),
   });
 
   if (authed === null) {
@@ -235,166 +215,373 @@ function AppShell() {
           />
         )}
 
-        <aside
-          className={`fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col border-r border-white/5 bg-ink-900/95 p-4 backdrop-blur transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0 lg:bg-ink-900/60 ${
-            navOpen ? "translate-x-0" : "-translate-x-full"
-          }`}
-        >
-          <div className="mb-8 flex items-center gap-3 px-2">
-            <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-brand-500 to-accent-500 shadow-glow">
-              <Clapperboard className="h-5 w-5 text-white" />
-            </div>
-            <div>
-              <div className="text-sm font-semibold leading-tight">Movie Night</div>
-              <div className="text-xs text-slate-400">VRChat Control</div>
-            </div>
-          </div>
-
-          <nav className="flex flex-1 flex-col gap-1">
-            {NAV.map((n) => {
-              const Icon = n.icon;
-              const active = tab === n.id;
-              return (
-                <button
-                  key={n.id}
-                  onClick={() => navigateTab(n.id)}
-                  className={`group flex items-center justify-between rounded-xl px-3 py-2.5 text-sm transition-colors ${
-                    active ? "bg-brand-500/15 text-white" : "text-slate-300 hover:bg-white/5"
-                  }`}
-                >
-                  <span className="flex items-center gap-3">
-                    <Icon className={`h-[18px] w-[18px] ${active ? "text-brand-400" : "text-slate-400"}`} />
-                    {n.label}
-                  </span>
-                  {n.id === "downloads" && activeDownloads > 0 && (
-                    <span className="chip bg-brand-500/20 text-brand-300">{activeDownloads}</span>
-                  )}
-                  {n.id === "queue" && queue.items.length > 0 && (
-                    <span className="chip bg-white/10 text-slate-300">{queue.items.length}</span>
-                  )}
-                  {n.id === "checklist" && checklistIssues > 0 && (
-                    <span
-                      className="h-2 w-2 shrink-0 rounded-full bg-red-500 ring-2 ring-ink-900"
-                      title={`${checklistIssues} checklist issue${checklistIssues === 1 ? "" : "s"}`}
-                    />
-                  )}
-                </button>
-              );
-            })}
-          </nav>
-
-          <div className="mt-4 space-y-2">
-            {nowTitle && (
-              <div className="rounded-xl bg-white/[0.03] px-3 py-2 text-xs">
-                <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                  {playing ? "Now playing" : paused ? "Paused" : "Queue"}
-                </div>
-                <div className="mt-0.5 truncate font-medium text-slate-200" title={nowTitle}>
-                  {nowTitle}
-                </div>
-                {(playing || paused) && (
-                  <div className="mt-0.5 tabular-nums text-slate-500">{fmtMs(nowCursor)}</div>
-                )}
-              </div>
-            )}
-            <div className="rounded-xl px-3 py-2 text-xs text-slate-400">@{user.username}</div>
-            <WsStatusBadge status={wsStatus} />
-            <div
-              className={`flex items-center gap-2 rounded-xl px-3 py-2 text-xs ${
-                obs.connected ? "bg-emerald-500/10 text-emerald-300" : "bg-red-500/10 text-red-300"
-              }`}
-            >
-              {obs.connected ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
-              <span>
-                OBS {obs.connected ? "connected" : "offline"}
-                {obs.connected && (obs.streaming ? " · live" : " · idle")}
-              </span>
-            </div>
-            <button
-              onClick={() => api.logout().then(() => { setAuthed(false); setUser(null); })}
-              className="btn-ghost w-full justify-start text-slate-400"
-            >
-              <LogOut className="h-4 w-4" /> Sign out
-            </button>
-          </div>
-        </aside>
+        <AppSidebar
+          navOpen={navOpen}
+          tab={tab}
+          activeDownloads={activeDownloads}
+          queue={queue}
+          checklistIssues={checklistIssues}
+          user={user}
+          nowTitle={nowTitle}
+          nowCursor={nowCursor}
+          playing={playing}
+          paused={paused}
+          wsStatus={wsStatus}
+          libraryScanning={libraryScanning}
+          obs={obs}
+          onNavigate={navigateTab}
+          onLogout={() => api.logout().then(() => { setAuthed(false); setUser(null); })}
+        />
 
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="flex shrink-0 items-center gap-2 border-b border-white/5 px-4 py-2 lg:hidden">
-            <button
-              type="button"
-              onClick={() => setNavOpen(true)}
-              className="btn-ghost !px-2 !py-2"
-              aria-label="Open menu"
-            >
-              <Menu className="h-5 w-5" />
-            </button>
-            <span className="truncate text-sm font-medium text-slate-200">
-              {NAV.find((n) => n.id === tab)?.label ?? "Movie Night"}
-            </span>
-          </div>
-
-          {(paused || showGoLiveWarning) && (
-            <div
-              className={`shrink-0 border-b px-4 py-2.5 text-sm ${
-                paused
-                  ? "border-amber-500/20 bg-amber-500/10 text-amber-200"
-                  : "border-brand-500/20 bg-brand-500/10 text-brand-200"
-              }`}
-            >
-              {paused ? (
-                <span className="flex items-center gap-2">
-                  <Pause className="h-4 w-4 shrink-0" />
-                  Intermission — playback is paused. Resume on Queue &amp; Player when ready.
-                </span>
-              ) : (
-                <span>
-                  Video is playing locally but the stream is not live — click <strong>Go live</strong> on Queue
-                  &amp; Player so friends see it in VRChat.
-                </span>
-              )}
-            </div>
-          )}
+          <MobileHeader tab={tab} onOpenNav={() => setNavOpen(true)} />
+          <PlaybackNotice paused={paused} showGoLiveWarning={showGoLiveWarning} />
 
           <div className="flex-1 overflow-y-auto">
             <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
-              {tab === "downloads" && (
-                <Downloads
-                  user={user}
-                  jobs={jobs}
-                  onChanged={refreshAll}
-                  onJobRemoved={(id) => setJobs((prev) => prev.filter((j) => j.id !== id))}
-                  initialStreamLaunch={pendingStreamLaunch}
-                  onInitialStreamOpenHandled={() => setPendingStreamLaunch(null)}
-                />
-              )}
-              {tab === "library" && <Library version={libVersion} user={user} />}
-              {tab === "watchlist" && (
-                <Watchlist
-                  user={user}
-                  refreshVersion={watchlistVersion}
-                  initialGroupId={watchlistGroupId}
-                  onGroupChange={(gid) => {
-                    setWatchlistGroupId(gid);
-                    writeNavToLocation({ tab: "watchlist", watchlistGroupId: gid });
-                  }}
-                  onGoToQueue={goToQueue}
-                />
-              )}
-              {tab === "stats" && <Stats />}
-              {tab === "queue" && (
-                <QueuePlayer queue={queue} player={player} obs={obs} onObs={setObs} />
-              )}
-              {tab === "checklist" && (
-                <MovieNightChecklist onIssuesChange={setChecklistIssues} />
-              )}
-              {tab === "settings" && <SettingsPage user={user} />}
+              <MainPanels
+                tab={tab}
+                user={user}
+                jobs={jobs}
+                queue={queue}
+                player={player}
+                obs={obs}
+                activityEvent={activityEvent}
+                session={session}
+                onSessionChange={setSession}
+                libVersion={libVersion}
+                watchlistVersion={watchlistVersion}
+                watchlistGroupId={watchlistGroupId}
+                watchlistSection={watchlistSection}
+                pendingStreamLaunch={pendingStreamLaunch}
+                onChanged={refreshAll}
+                onJobRemoved={(id) => setJobs((prev) => prev.filter((j) => j.id !== id))}
+                onInitialStreamOpenHandled={() => setPendingStreamLaunch(null)}
+                onWatchlistGroupChange={(gid) => {
+                  setWatchlistGroupId(gid);
+                  writeNavToLocation({ tab: "watchlist", watchlistGroupId: gid, watchlistSection });
+                }}
+                onWatchlistSectionChange={(section) => {
+                  setWatchlistSection(section);
+                  writeNavToLocation({ tab: "watchlist", watchlistGroupId, watchlistSection: section });
+                }}
+                onGoToQueue={goToQueue}
+                onObs={setObs}
+                onChecklistIssuesChange={setChecklistIssues}
+              />
             </div>
           </div>
         </main>
       </div>
     </PlaybackProvider>
   );
+}
+
+function AppSidebar({
+  navOpen,
+  tab,
+  activeDownloads,
+  queue,
+  checklistIssues,
+  user,
+  nowTitle,
+  nowCursor,
+  playing,
+  paused,
+  wsStatus,
+  libraryScanning,
+  obs,
+  onNavigate,
+  onLogout,
+}: {
+  navOpen: boolean;
+  tab: Tab;
+  activeDownloads: number;
+  queue: QueueSnapshot;
+  checklistIssues: number;
+  user: UserInfo;
+  nowTitle?: string;
+  nowCursor: number;
+  playing: boolean;
+  paused: boolean;
+  wsStatus: WsStatus;
+  libraryScanning: boolean;
+  obs: ObsState;
+  onNavigate: (next: Tab) => void;
+  onLogout: () => void;
+}) {
+  return (
+    <aside
+      className={`fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col border-r border-white/5 bg-ink-900/95 p-4 backdrop-blur transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0 lg:bg-ink-900/60 ${
+        navOpen ? "translate-x-0" : "-translate-x-full"
+      }`}
+    >
+      <div className="mb-8 flex items-center gap-3 px-2">
+        <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-brand-500 to-accent-500 shadow-glow">
+          <Clapperboard className="h-5 w-5 text-white" />
+        </div>
+        <div>
+          <div className="text-sm font-semibold leading-tight">Movie Night</div>
+          <div className="text-xs text-slate-400">VRChat Control</div>
+        </div>
+      </div>
+
+      <nav className="flex flex-1 flex-col gap-1">
+        {NAV.map((item) => (
+          <AppNavButton
+            key={item.id}
+            item={item}
+            active={tab === item.id}
+            activeDownloads={activeDownloads}
+            queueCount={queue.items.length}
+            checklistIssues={checklistIssues}
+            onNavigate={onNavigate}
+          />
+        ))}
+      </nav>
+
+      <div className="mt-4 space-y-2">
+        {nowTitle && (
+          <NowPlayingCard
+            title={nowTitle}
+            cursor={nowCursor}
+            playing={playing}
+            paused={paused}
+          />
+        )}
+        <div className="rounded-xl px-3 py-2 text-xs text-slate-400">@{user.username}</div>
+        <WsStatusBadge status={wsStatus} />
+        {libraryScanning && <ScanningChip />}
+        <ObsStatusBadge obs={obs} />
+        <button onClick={onLogout} className="btn-ghost w-full justify-start text-slate-400">
+          <LogOut className="h-4 w-4" /> Sign out
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+function AppNavButton({
+  item,
+  active,
+  activeDownloads,
+  queueCount,
+  checklistIssues,
+  onNavigate,
+}: {
+  item: (typeof NAV)[number];
+  active: boolean;
+  activeDownloads: number;
+  queueCount: number;
+  checklistIssues: number;
+  onNavigate: (next: Tab) => void;
+}) {
+  const Icon = item.icon;
+
+  return (
+    <button
+      onClick={() => onNavigate(item.id)}
+      className={`group flex items-center justify-between rounded-xl px-3 py-2.5 text-sm transition-colors ${
+        active ? "bg-brand-500/15 text-white" : "text-slate-300 hover:bg-white/5"
+      }`}
+    >
+      <span className="flex items-center gap-3">
+        <Icon className={`h-[18px] w-[18px] ${active ? "text-brand-400" : "text-slate-400"}`} />
+        {item.label}
+      </span>
+      {item.id === "downloads" && activeDownloads > 0 && (
+        <span className="chip bg-brand-500/20 text-brand-300">{activeDownloads}</span>
+      )}
+      {item.id === "queue" && queueCount > 0 && (
+        <span className="chip bg-white/10 text-slate-300">{queueCount}</span>
+      )}
+      {item.id === "checklist" && checklistIssues > 0 && (
+        <span
+          className="h-2 w-2 shrink-0 rounded-full bg-red-500 ring-2 ring-ink-900"
+          title={`${checklistIssues} checklist issue${checklistIssues === 1 ? "" : "s"}`}
+        />
+      )}
+    </button>
+  );
+}
+
+function NowPlayingCard({
+  title,
+  cursor,
+  playing,
+  paused,
+}: {
+  title: string;
+  cursor: number;
+  playing: boolean;
+  paused: boolean;
+}) {
+  return (
+    <div className="rounded-xl bg-white/[0.03] px-3 py-2 text-xs">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500">
+        {playing ? "Now playing" : paused ? "Paused" : "Queue"}
+      </div>
+      <div className="mt-0.5 truncate font-medium text-slate-200" title={title}>
+        {title}
+      </div>
+      {(playing || paused) && <div className="mt-0.5 tabular-nums text-slate-500">{fmtMs(cursor)}</div>}
+    </div>
+  );
+}
+
+function ObsStatusBadge({ obs }: { obs: ObsState }) {
+  return (
+    <div
+      className={`flex items-center gap-2 rounded-xl px-3 py-2 text-xs ${
+        obs.connected ? "bg-emerald-500/10 text-emerald-300" : "bg-red-500/10 text-red-300"
+      }`}
+    >
+      {obs.connected ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
+      <span>
+        OBS {obs.connected ? "connected" : "offline"}
+        {obs.connected && (obs.streaming ? " · live" : " · idle")}
+      </span>
+    </div>
+  );
+}
+
+function MobileHeader({ tab, onOpenNav }: { tab: Tab; onOpenNav: () => void }) {
+  return (
+    <div className="flex shrink-0 items-center gap-2 border-b border-white/5 px-4 py-2 lg:hidden">
+      <button type="button" onClick={onOpenNav} className="btn-ghost !px-2 !py-2" aria-label="Open menu">
+        <Menu className="h-5 w-5" />
+      </button>
+      <span className="truncate text-sm font-medium text-slate-200">
+        {NAV.find((n) => n.id === tab)?.label ?? "Movie Night"}
+      </span>
+    </div>
+  );
+}
+
+function PlaybackNotice({
+  paused,
+  showGoLiveWarning,
+}: {
+  paused: boolean;
+  showGoLiveWarning: boolean;
+}) {
+  if (!paused && !showGoLiveWarning) return null;
+
+  return (
+    <div
+      className={`shrink-0 border-b px-4 py-2.5 text-sm ${
+        paused ? "border-amber-500/20 bg-amber-500/10 text-amber-200" : "border-brand-500/20 bg-brand-500/10 text-brand-200"
+      }`}
+    >
+      {paused ? (
+        <span className="flex items-center gap-2">
+          <Pause className="h-4 w-4 shrink-0" />
+          Intermission — playback is paused. Resume on Queue &amp; Player when ready.
+        </span>
+      ) : (
+        <span>
+          Video is playing locally but the stream is not live — click <strong>Go live</strong> on Queue &amp; Player
+          so friends see it in VRChat.
+        </span>
+      )}
+    </div>
+  );
+}
+
+function MainPanels({
+  tab,
+  user,
+  jobs,
+  queue,
+  player,
+  obs,
+  activityEvent,
+  session,
+  onSessionChange,
+  libVersion,
+  watchlistVersion,
+  watchlistGroupId,
+  watchlistSection,
+  pendingStreamLaunch,
+  onChanged,
+  onJobRemoved,
+  onInitialStreamOpenHandled,
+  onWatchlistGroupChange,
+  onWatchlistSectionChange,
+  onGoToQueue,
+  onObs,
+  onChecklistIssuesChange,
+}: {
+  tab: Tab;
+  user: UserInfo;
+  jobs: Job[];
+  queue: QueueSnapshot;
+  player: PlayerState | null;
+  obs: ObsState;
+  activityEvent?: AppEvent | null;
+  session: MovieNightSession | null;
+  onSessionChange: Dispatch<SetStateAction<MovieNightSession | null>>;
+  libVersion: number;
+  watchlistVersion: number;
+  watchlistGroupId?: number;
+  watchlistSection: WatchlistSection;
+  pendingStreamLaunch: StreamLaunch | null;
+  onChanged: () => void;
+  onJobRemoved: (id: string) => void;
+  onInitialStreamOpenHandled: () => void;
+  onWatchlistGroupChange: (id?: number) => void;
+  onWatchlistSectionChange: (section: WatchlistSection) => void;
+  onGoToQueue: () => void;
+  onObs: Dispatch<SetStateAction<ObsState>>;
+  onChecklistIssuesChange: Dispatch<SetStateAction<number>>;
+}) {
+  switch (tab) {
+    case "downloads":
+      return (
+        <Downloads
+          user={user}
+          jobs={jobs}
+          onChanged={onChanged}
+          onJobRemoved={onJobRemoved}
+          initialStreamLaunch={pendingStreamLaunch}
+          onInitialStreamOpenHandled={onInitialStreamOpenHandled}
+        />
+      );
+    case "library":
+      return <Library version={libVersion} user={user} />;
+    case "watchlist":
+      return (
+        <Watchlist
+          user={user}
+          refreshVersion={watchlistVersion}
+          initialGroupId={watchlistGroupId}
+          section={watchlistSection}
+          onGroupChange={onWatchlistGroupChange}
+          onSectionChange={onWatchlistSectionChange}
+          onGoToQueue={onGoToQueue}
+        />
+      );
+    case "stats":
+      return <Stats />;
+    case "queue":
+      return (
+        <QueuePlayer
+          queue={queue}
+          player={player}
+          obs={obs}
+          onObs={onObs}
+          activityEvent={activityEvent}
+          user={user}
+          session={session}
+          onSessionChange={onSessionChange}
+          libraryVersion={libVersion + watchlistVersion}
+        />
+      );
+    case "checklist":
+      return <MovieNightChecklist onIssuesChange={onChecklistIssuesChange} />;
+    case "settings":
+      return <SettingsPage user={user} />;
+  }
 }
 
 export default function App() {
@@ -404,6 +591,15 @@ export default function App() {
         <AppShell />
       </WatchlistAddProvider>
     </ToastProvider>
+  );
+}
+
+function ScanningChip() {
+  return (
+    <div className="flex items-center gap-2 rounded-xl bg-brand-500/10 px-3 py-2 text-xs text-brand-300">
+      <span className="h-2 w-2 animate-pulse rounded-full bg-brand-400" />
+      Scanning library…
+    </div>
   );
 }
 

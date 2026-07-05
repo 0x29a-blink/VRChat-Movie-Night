@@ -10,7 +10,7 @@ export type StreamLaunch =
   | { source: "tmdb"; raw: string }
   | { source: "stremio"; stremio_id: string; media: "movie" | "series" };
 
-export function encodeTmdbStreamOpen(params: StreamOpenParams & { tmdb_id: number }): string {
+function encodeTmdbStreamOpen(params: StreamOpenParams & { tmdb_id: number }): string {
   const parts = [String(params.tmdb_id), params.type];
   if (params.season != null) parts.push(String(params.season));
   if (params.episode != null) parts.push(String(params.episode));
@@ -101,22 +101,4 @@ export function clearStreamLaunchFromLocation(): void {
   if (!changed) return;
   const next = url.pathname + (url.search || "") + url.hash;
   window.history.replaceState({}, "", next);
-}
-
-/** @deprecated use decodeTmdbStreamOpen */
-export function decodeStreamOpen(raw: string) {
-  return decodeTmdbStreamOpen(raw);
-}
-
-/** @deprecated use readStreamLaunchFromLocation */
-export function readStreamOpenFromLocation(): string | null {
-  const launch = readStreamLaunchFromLocation();
-  if (!launch) return null;
-  if (launch.source === "tmdb") return launch.raw;
-  return null;
-}
-
-/** @deprecated use clearStreamLaunchFromLocation */
-export function clearStreamOpenFromLocation(): void {
-  clearStreamLaunchFromLocation();
 }

@@ -87,7 +87,7 @@ def _start_mediamtx() -> bool:
     if not cfg.is_file():
         print(f"[stack] Missing {cfg}")
         return False
-    print(f"[stack] MediaMTX  RTMP :1935  HLS http://localhost:8888/live/vrstream/")
+    print("[stack] MediaMTX  RTMP :1935  HLS http://localhost:8888/live/vrstream/")
     proc = popen_service("MediaMTX", [str(exe), "mediamtx.yml"], cwd=MEDIAMTX_DIR)
     threading.Thread(target=_relay_output, args=(proc, "MediaMTX"), daemon=True).start()
     return True

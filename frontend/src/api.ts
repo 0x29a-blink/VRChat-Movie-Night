@@ -59,10 +59,10 @@ export const api = {
   // users (admin)
   listUsers: () => get<{ users: import("./types").UserInfo[] }>("/api/users"),
   createUser: (username: string, password: string, role = "member") =>
-    post<{ user: import("./types").UserInfo; password: string }>("/api/users", { username, password, role }),
+    post<{ user: import("./types").UserInfo }>("/api/users", { username, password, role }),
   deleteUser: (id: number) => del(`/api/users/${id}`),
   resetUserPassword: (id: number, password: string) =>
-    post<{ ok: boolean; password: string }>(`/api/users/${id}/reset-password`, { password }),
+    post<{ ok: boolean }>(`/api/users/${id}/reset-password`, { password }),
   setUserWatchlistStatsExcluded: (id: number, excluded: boolean) =>
     put<{ user: import("./types").UserInfo }>(`/api/users/${id}/watchlist-stats-excluded`, { excluded }),
   setUserLocalDownload: (id: number, allowed: boolean) =>
@@ -133,8 +133,11 @@ export const api = {
     link?: import("./types").DownloadLinkMeta;
   }) => post("/api/downloads/torrent", payload),
   cancelDownload: (id: string) => post(`/api/downloads/${id}/cancel`),
-  restartDownload: (id: string) => post(`/api/downloads/${id}/restart`),
+  restartDownload: (id: string, mode?: "auto" | "direct" | "hls" | "ytdlp") =>
+    post(`/api/downloads/${id}/restart`, mode && mode !== "auto" ? { mode } : undefined),
   removeDownload: (id: string) => del(`/api/downloads/${id}`),
+  clearDownloads: (statuses: string[]) =>
+    post<{ ok: boolean; removed: string[] }>("/api/downloads/clear", { statuses }),
 
   // search
   search: (q: string) => get<import("./types").SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`),
@@ -245,7 +248,8 @@ export const api = {
     if (opts.episode != null) params.set("episode", String(opts.episode));
     return get<{ match: import("./types").LibraryItem | null }>(`/api/library/match?${params}`);
   },
-  scanLibrary: () => post("/api/library/scan"),
+  scanLibrary: () => post<{ ok: boolean; scanning: boolean }>("/api/library/scan"),
+  libraryScanStatus: () => get<{ scanning: boolean }>("/api/library/scan/status"),
   renameLibraryItem: (id: number, title: string) =>
     req<import("./types").LibraryItem>(`/api/library/${id}`, {
       method: "PATCH",
@@ -271,6 +275,31 @@ export const api = {
   queueClear: () => post<import("./types").QueueSnapshot>("/api/queue/clear"),
   queueReorder: (ids: number[]) =>
     post<import("./types").QueueSnapshot>("/api/queue/reorder", { ids }),
+  queuePrepareAll: () => post<import("./types").QueueSnapshot>("/api/queue/prepare"),
+  queuePrepareItem: (id: number) =>
+    post<import("./types").QueueSnapshot>(`/api/queue/${id}/prepare`),
+
+  // movie night session
+  sessionCurrent: () =>
+    get<{ active: import("./types").MovieNightSession | null }>("/api/session/current"),
+  sessionStart: (group_id?: number | null) =>
+    post<import("./types").MovieNightSession>("/api/session/start", { group_id: group_id ?? null }),
+  sessionPick: (watchlist_item_id: number) =>
+    post<import("./types").MovieNightSession>("/api/session/pick", { watchlist_item_id }),
+  sessionQueue: () => post<import("./types").MovieNightSession>("/api/session/queue"),
+  sessionAdvance: (state: "playing" | "rating") =>
+    post<import("./types").MovieNightSession>("/api/session/advance", { state }),
+  sessionEnd: () => post<import("./types").MovieNightSession>("/api/session/end"),
+
+  // events (activity feed)
+  events: (opts: { limit?: number; beforeId?: number } = {}) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(opts.limit ?? 50));
+    if (opts.beforeId != null) params.set("before_id", String(opts.beforeId));
+    return get<{ events: import("./types").AppEvent[]; has_more: boolean }>(
+      `/api/events?${params}`
+    );
+  },
 
   // player
   playerStatus: () => get<import("./types").PlayerState>("/api/player/status"),
@@ -328,6 +357,9 @@ export const api = {
       recommendations?: string[];
       error?: string;
     }>("/api/settings/obs-apply"),
+  testTmdb: () => post<import("./types").ProviderCheckResult>("/api/settings/test-tmdb"),
+  testTorbox: () => post<import("./types").ProviderCheckResult>("/api/settings/test-torbox"),
+  testAiostreams: () => post<import("./types").ProviderCheckResult>("/api/settings/test-aiostreams"),
 
   streamPresets: () =>
     get<{
@@ -379,7 +411,7 @@ export const api = {
       body: blob,
     }).then(async (res) => {
       const text = await res.text();
-      let data: unknown = {};
+      let data: unknown;
       try {
         data = text ? JSON.parse(text) : {};
       } catch {
@@ -521,6 +553,8 @@ export const api = {
     const q = params.toString();
     return get<import("./types").StatsSummary>(q ? `/api/stats?${q}` : "/api/stats");
   },
+  getStatsTimeline: (days = 90) =>
+    get<import("./types").StatsTimeline>(`/api/stats/timeline?days=${days}`),
 
   exportBackup: async () => {
     const res = await fetch("/api/backup/export", { credentials: "include" });
@@ -536,7 +570,7 @@ export const api = {
     }
     const blob = await res.blob();
     const disp = res.headers.get("Content-Disposition") ?? "";
-    const match = disp.match(/filename=\"?([^\";]+)/);
+    const match = disp.match(/filename="?([^";]+)/);
     const filename = match?.[1] ?? "movie-night-backup.json";
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -548,4 +582,7 @@ export const api = {
 
   importBackup: (data: unknown) =>
     post<import("./types").BackupImportResult>("/api/backup/import", { data }),
+
+  previewBackupImport: (data: unknown) =>
+    post<import("./types").BackupImportPreview>("/api/backup/import-preview", { data }),
 };

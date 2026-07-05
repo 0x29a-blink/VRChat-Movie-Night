@@ -61,6 +61,7 @@ export function StreamOpenLink({
   );
 }
 
+// fallow-ignore-next-line unused-export
 export function StreamNewTabButton({
   params,
   disabled,

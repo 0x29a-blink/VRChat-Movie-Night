@@ -29,13 +29,6 @@ class LoopBody(BaseModel):
     enabled: bool
 
 
-def _handle(fn):
-    try:
-        return fn()
-    except Exception as exc:
-        raise HTTPException(502, f"OBS error: {exc}")
-
-
 @router.get("/status")
 async def status():
     try:

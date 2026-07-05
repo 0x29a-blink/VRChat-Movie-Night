@@ -5,8 +5,9 @@ from pathlib import Path
 
 from .. import settings_store
 from ..db import SessionLocal
-from ..models import LibraryItem, QueueItem
+from ..events import record_event
 from ..library.playback import build_playback_file
+from ..models import LibraryItem, QueueItem
 from ..obs.controller import aio, controller
 from ..ws import hub
 
@@ -32,6 +33,21 @@ class QueueManager:
         self._ignore_end_until = 0.0
         self._stall_last_cursor: int | None = None
         self._stall_last_move_at = 0.0
+        # Pre-remux "prepare queue" support (plan 013). Never more than one
+        # background remux at a time — ffmpeg is heavy and live playback may
+        # also need CPU. Status values: pending|preparing|ready|failed:<msg>.
+        self._prepare_sem = asyncio.Semaphore(1)
+        self._prepare: dict[int, str] = {}
+        self._prepare_tasks: dict[int, asyncio.Task] = {}
+        # Per-file locks so a background prepare and a play of the SAME item
+        # never run ffmpeg against the same cache file concurrently
+        # (build_playback_file has no internal locking).
+        # Deadlock analysis: prepare acquires the global semaphore THEN the
+        # item's file lock; play_index acquires ONLY the file lock and never
+        # the semaphore — a single acquisition order with no cycle. All
+        # lock/dict access happens on the event loop, so the dict itself
+        # needs no extra synchronization.
+        self._file_locks: dict[str, asyncio.Lock] = {}
 
     def _current_index(self) -> int:
         val = settings_store.get(CURRENT_KEY, -1)
@@ -100,6 +116,8 @@ class QueueManager:
     def snapshot(self) -> dict:
         with SessionLocal() as s:
             items = [i.to_dict() for i in self._items(s)]
+        for item in items:
+            item["prepare_status"] = self._prepare.get(item["id"], "")
         idx = self._current_index()
         if idx < 0 or idx >= len(items):
             idx = -1
@@ -110,40 +128,48 @@ class QueueManager:
         await hub.broadcast("queue_update", self.snapshot())
 
     # ---- mutations ------------------------------------------------------
-    def _add_item(self, s, library_path: str, title: str, thumbnail: str, duration: float) -> QueueItem:
+    def _add_item(self, s, library_path: str, title: str, thumbnail: str, duration: float,
+                  user=None) -> QueueItem:
         last = s.query(QueueItem).order_by(QueueItem.position.desc()).first()
         pos = (last.position + 1) if last else 0
         item = QueueItem(
             library_path=library_path, title=title, thumbnail=thumbnail,
             duration=duration, position=pos,
+            queued_by_user_id=getattr(user, "id", None),
+            queued_by=getattr(user, "username", "") or "",
         )
         s.add(item)
         return item
 
-    async def add_library_item(self, library_id: int) -> dict:
+    async def add_library_item(self, library_id: int, user=None) -> dict:
         with SessionLocal() as s:
             lib = s.get(LibraryItem, library_id)
             if not lib:
                 raise ValueError("Library item not found")
-            self._add_item(s, lib.path, lib.display_title(),
-                           lib.display_poster(), lib.duration)
+            title = lib.display_title()
+            self._add_item(s, lib.path, title,
+                           lib.display_poster(), lib.duration, user=user)
             s.commit()
+        record_event("queue_add", title, user=user)
         await self.broadcast()
         return self.snapshot()
 
-    async def add_path(self, path: str, title: str = "") -> dict:
+    async def add_path(self, path: str, title: str = "", user=None) -> dict:
         with SessionLocal() as s:
-            self._add_item(s, path, title or Path(path).stem, "", 0.0)
+            final_title = title or Path(path).stem
+            self._add_item(s, path, final_title, "", 0.0, user=user)
             s.commit()
+        record_event("queue_add", final_title, user=user)
         await self.broadcast()
         return self.snapshot()
 
-    async def remove(self, item_id: int) -> dict:
+    async def remove(self, item_id: int, user=None) -> dict:
         with SessionLocal() as s:
             item = s.get(QueueItem, item_id)
             if item:
                 items = self._items(s)
                 removed_pos = next((n for n, it in enumerate(items) if it.id == item_id), None)
+                removed_title = item.title
                 s.delete(item)
                 s.commit()
                 # fix current index if needed
@@ -151,14 +177,20 @@ class QueueManager:
                 if removed_pos is not None and removed_pos < idx:
                     self._set_current_index(idx - 1)
                 self._renumber()
+                record_event("queue_remove", removed_title, user=user)
+                self._prepare.pop(item_id, None)
+                self._prepare_tasks.pop(item_id, None)
         await self.broadcast()
         return self.snapshot()
 
-    async def clear(self) -> dict:
+    async def clear(self, user=None) -> dict:
         with SessionLocal() as s:
             s.query(QueueItem).delete()
             s.commit()
         self._set_current_index(-1)
+        record_event("queue_clear", "Queue", user=user)
+        self._prepare.clear()
+        self._prepare_tasks.clear()
         await self.broadcast()
         return self.snapshot()
 
@@ -187,6 +219,82 @@ class QueueManager:
         await self.broadcast()
         return self.snapshot()
 
+    # ---- prepare (pre-remux) ---------------------------------------------
+    def _file_lock(self, path: str) -> asyncio.Lock:
+        """Per-library-path lock (created on demand, kept for process life —
+        never dropped while a holder may exist)."""
+        lock = self._file_locks.get(path)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._file_locks[path] = lock
+        return lock
+
+    async def prepare_item(self, item_id: int) -> dict:
+        """Kick off a background remux for one queue item so play-time gets an
+        instant cache hit. No-op if already ready or in flight; a failed item
+        may be retried."""
+        status = self._prepare.get(item_id, "")
+        existing = self._prepare_tasks.get(item_id)
+        if status in ("pending", "preparing", "ready") or (existing and not existing.done()):
+            return self.snapshot()
+
+        with SessionLocal() as s:
+            item = s.get(QueueItem, item_id)
+            if not item:
+                raise ValueError("Queue item not found")
+            lib = s.query(LibraryItem).filter(
+                LibraryItem.path == item.library_path).first()
+            title = item.title
+            library_path = item.library_path
+
+        if not lib:
+            # Raw path with no library entry — play_index opens it as-is, so
+            # there is nothing to remux.
+            self._prepare[item_id] = "ready"
+            await self.broadcast()
+            return self.snapshot()
+
+        self._prepare[item_id] = "pending"
+        await self.broadcast()
+        task = asyncio.create_task(self._run_prepare(item_id, lib, library_path, title))
+        self._prepare_tasks[item_id] = task
+        return self.snapshot()
+
+    async def _run_prepare(self, item_id: int, lib: LibraryItem,
+                           library_path: str, title: str) -> None:
+        # Acquisition order: global semaphore FIRST, then the per-item file
+        # lock (play_index takes only the file lock) — see __init__ comment
+        # for the deadlock analysis.
+        async with self._prepare_sem:
+            if item_id not in self._prepare:
+                return  # removed from queue while waiting for the semaphore
+            self._prepare[item_id] = "preparing"
+            await self.broadcast()
+            try:
+                async with self._file_lock(library_path):
+                    await asyncio.to_thread(build_playback_file, lib)
+            except Exception as exc:
+                status = f"failed:{exc}"
+                logger.warning("Prepare failed for %s (queue item %s): %s",
+                               title, item_id, exc)
+            else:
+                status = "ready"
+                record_event("queue_prepare", title)
+            if item_id in self._prepare:  # skip if removed mid-remux
+                self._prepare[item_id] = status
+            await self.broadcast()
+
+    async def prepare_all(self) -> dict:
+        with SessionLocal() as s:
+            item_ids = [i.id for i in self._items(s)]
+        for item_id in item_ids:
+            status = self._prepare.get(item_id, "")
+            existing = self._prepare_tasks.get(item_id)
+            if status in ("pending", "preparing", "ready") or (existing and not existing.done()):
+                continue
+            await self.prepare_item(item_id)
+        return self.snapshot()
+
     # ---- playback -------------------------------------------------------
     async def play_index(self, idx: int) -> dict:
         self._begin_play_switch()
@@ -198,7 +306,11 @@ class QueueManager:
             lib = s.query(LibraryItem).filter(LibraryItem.path == target.library_path).first()
             if lib:
                 try:
-                    path = await asyncio.to_thread(build_playback_file, lib)
+                    # Coordinate with background prepares of the SAME file:
+                    # takes only the per-item lock, never the prepare
+                    # semaphore (see __init__ deadlock analysis).
+                    async with self._file_lock(target.library_path):
+                        path = await asyncio.to_thread(build_playback_file, lib)
                 except Exception as exc:
                     raise ValueError(f"Could not prepare playback: {exc}") from exc
             else:
@@ -249,6 +361,8 @@ class QueueManager:
             now = time.monotonic()
             if now - self._last_advance_at < _ADVANCE_DEBOUNCE_SEC:
                 return
+            before = self.snapshot()
+            skipped = before.get("current") or {}
             try:
                 snap = await self.next()
             except Exception:
@@ -261,6 +375,16 @@ class QueueManager:
             cur = snap.get("current") or {}
             title = cur.get("title") or "next item"
             logger.info("Queue auto-advanced (%s) to index %s (%s)", reason, cur_idx, title)
+            if reason != "playback ended":
+                skipped_title = skipped.get("title") or "current item"
+                record_event("auto_skip", skipped_title, detail=reason)
+                await hub.broadcast(
+                    "player_warning",
+                    {
+                        "reason": reason,
+                        "title": skipped_title,
+                    },
+                )
 
     async def advance_after_end(self) -> None:
         """Advance queue when the current file finishes (event + poller)."""

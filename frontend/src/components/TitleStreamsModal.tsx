@@ -10,12 +10,11 @@ import { ManualStreamForm } from "./ManualStreamForm";
 import { StreamResultsPanel } from "./StreamFiltersPanel";
 import { usePlayback } from "./PlaybackContext";
 import type { StreamTarget } from "./streamTarget";
-import { loadStreamFilters, saveStreamFilters } from "../streamFilters";
 import { copyStreamDownloadLink, saveLibraryItemToPc, saveStreamToPc } from "../localDownload";
 import { useToast } from "./Toast";
 import { filterAndSortStreams, streamKey } from "../streamListUtils";
-
-const INITIAL_FILTERS = loadStreamFilters();
+import { useStreamFilterState } from "../useStreamFilterState";
+import { useSeasonEpisodeState } from "../useSeasonEpisodeState";
 
 export function TitleStreamsModal({
   open,
@@ -30,11 +29,18 @@ export function TitleStreamsModal({
 }) {
   const { push: pushToast } = useToast();
   const { playFromLibrary, queueFromLibrary } = usePlayback();
-  const [seasons, setSeasons] = useState<{ season_number: number; name: string; episode_count: number }[]>([]);
-  const [season, setSeason] = useState<number | undefined>();
-  const [episode, setEpisode] = useState<number | undefined>();
-  const [episodes, setEpisodes] = useState<TmdbEpisode[]>([]);
-  const [loadingEpisodes, setLoadingEpisodes] = useState(false);
+  const {
+    seasons,
+    setSeasons,
+    season,
+    setSeason,
+    episode,
+    setEpisode,
+    episodes,
+    setEpisodes,
+    loadingEpisodes,
+    setLoadingEpisodes,
+  } = useSeasonEpisodeState();
 
   const [streams, setStreams] = useState<StreamResult[]>([]);
   const [loadingStreams, setLoadingStreams] = useState(false);
@@ -43,33 +49,22 @@ export function TitleStreamsModal({
   const [error, setError] = useState("");
   const [playbackBusy, setPlaybackBusy] = useState(false);
   const streamsRequest = useRef(0);
-
-  const [minRes, setMinRes] = useState(INITIAL_FILTERS.minRes);
-  const [codec, setCodec] = useState(INITIAL_FILTERS.codec);
-  const [maxSize, setMaxSize] = useState(INITIAL_FILTERS.maxSize);
-  const [cachedOnly, setCachedOnly] = useState(INITIAL_FILTERS.cachedOnly);
-  const [minSeeders, setMinSeeders] = useState(INITIAL_FILTERS.minSeeders);
-  const [sortBy, setSortBy] = useState<"quality" | "size" | "seeders">(INITIAL_FILTERS.sortBy);
-  const [audioLang, setAudioLang] = useState(INITIAL_FILTERS.audioLang);
-  const [subtitleType, setSubtitleType] = useState(INITIAL_FILTERS.subtitleType);
-  const [preferDub, setPreferDub] = useState(INITIAL_FILTERS.preferDub);
-  const [searchText, setSearchText] = useState("");
   const [downloadQueued, setDownloadQueued] = useState(false);
-
-  useEffect(() => {
-    saveStreamFilters({
-      searchText,
-      minRes,
-      codec,
-      maxSize,
-      cachedOnly,
-      minSeeders,
-      sortBy,
-      audioLang,
-      subtitleType,
-      preferDub,
-    });
-  }, [searchText, minRes, codec, maxSize, cachedOnly, minSeeders, sortBy, audioLang, subtitleType, preferDub]);
+  const { filters, updateFilters, presets, savePreset, applyPreset, deletePreset } = useStreamFilterState();
+  const {
+    searchText,
+    minRes,
+    codec,
+    maxSize,
+    cachedOnly,
+    minSeeders,
+    sortBy,
+    audioLang,
+    subtitleType,
+    preferDub,
+    indexer,
+    releaseGroup,
+  } = filters;
 
   useEffect(() => {
     if (!open || !target) return;
@@ -291,22 +286,25 @@ export function TitleStreamsModal({
         audioLang,
         subtitleType,
         preferDub,
+        indexer,
+        releaseGroup,
       }),
-    [streams, searchText, minRes, codec, maxSize, cachedOnly, minSeeders, sortBy, audioLang, subtitleType, preferDub]
+    [
+      streams,
+      searchText,
+      minRes,
+      codec,
+      maxSize,
+      cachedOnly,
+      minSeeders,
+      sortBy,
+      audioLang,
+      subtitleType,
+      preferDub,
+      indexer,
+      releaseGroup,
+    ]
   );
-
-  const updateFilters = (patch: Partial<typeof INITIAL_FILTERS>) => {
-    if (patch.searchText !== undefined) setSearchText(patch.searchText);
-    if (patch.minRes !== undefined) setMinRes(patch.minRes);
-    if (patch.codec !== undefined) setCodec(patch.codec);
-    if (patch.maxSize !== undefined) setMaxSize(patch.maxSize);
-    if (patch.cachedOnly !== undefined) setCachedOnly(patch.cachedOnly);
-    if (patch.minSeeders !== undefined) setMinSeeders(patch.minSeeders);
-    if (patch.sortBy !== undefined) setSortBy(patch.sortBy);
-    if (patch.audioLang !== undefined) setAudioLang(patch.audioLang);
-    if (patch.subtitleType !== undefined) setSubtitleType(patch.subtitleType);
-    if (patch.preferDub !== undefined) setPreferDub(patch.preferDub);
-  };
 
   if (!open || !target) return null;
 
@@ -492,8 +490,14 @@ export function TitleStreamsModal({
                 audioLang,
                 subtitleType,
                 preferDub,
+                indexer,
+                releaseGroup,
               }}
               onFiltersChange={updateFilters}
+              presets={presets}
+              onApplyPreset={applyPreset}
+              onSavePreset={savePreset}
+              onDeletePreset={deletePreset}
             />
           )}
 

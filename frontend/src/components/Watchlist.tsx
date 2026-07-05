@@ -44,6 +44,8 @@ import { usePlayback } from "./PlaybackContext";
 import { LinkWatchlistTmdbModal } from "./LinkWatchlistTmdbModal";
 import { useToast } from "./Toast";
 
+const GROUP_TEMPLATES = ["Horror Month", "Anime Night", "Movie Backlog", "Series Night", "Finished"];
+
 function DeleteConfirmModal({
   item,
   busy,
@@ -463,7 +465,7 @@ function StarPicker({
 }
 
 function ItemComments({ itemId, commentCount = 0 }: { itemId: number; commentCount?: number }) {
-  const [open, setOpen] = useState(commentCount > 0);
+  const [open, setOpen] = useState(false);
   const [comments, setComments] = useState<{ id: number; body: string; username: string; created_at: string }[]>([]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -477,8 +479,8 @@ function ItemComments({ itemId, commentCount = 0 }: { itemId: number; commentCou
   };
 
   useEffect(() => {
-    setOpen(commentCount > 0);
-  }, [itemId, commentCount]);
+    setOpen(false);
+  }, [itemId]);
 
   useEffect(() => {
     if (open) load();
@@ -1269,13 +1271,17 @@ export function Watchlist({
   user,
   refreshVersion = 0,
   initialGroupId,
+  section,
   onGroupChange,
+  onSectionChange,
   onGoToQueue,
 }: {
   user: UserInfo;
   refreshVersion?: number;
   initialGroupId?: number;
+  section: "to_watch" | "watched";
   onGroupChange?: (groupId: number) => void;
+  onSectionChange?: (section: "to_watch" | "watched") => void;
   onGoToQueue?: () => void;
 }) {
   const { push: pushToast } = useToast();
@@ -1284,7 +1290,6 @@ export function Watchlist({
   const [ungroupedCounts, setUngroupedCounts] = useState({ to_watch: 0, watched: 0, needs_rating: 0 });
   const [selectedGroupId, setSelectedGroupId] = useState<number>(initialGroupId ?? 0);
   const [groupQueueBusy, setGroupQueueBusy] = useState(false);
-  const [section, setSection] = useState<"to_watch" | "watched">("to_watch");
   const [items, setItems] = useState<WatchlistItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [newGroupName, setNewGroupName] = useState("");
@@ -1296,6 +1301,21 @@ export function Watchlist({
   const [error, setError] = useState("");
   const [itemFilter, setItemFilter] = useState("");
   const [watchedSort, setWatchedSort] = useState<WatchedSort>("needs_rating");
+  const [watcherFilter, setWatcherFilter] = useState<"any" | "not_me" | number>("any");
+  const loadItemsSeqRef = useRef(0);
+  const loadItemsRef = useRef<() => void>(() => {});
+
+  const watcherOptions = useMemo(() => {
+    const byId = new Map<number, string>();
+    for (const item of items) {
+      for (const w of item.user_watch ?? []) {
+        if (!byId.has(w.user_id)) byId.set(w.user_id, w.username);
+      }
+    }
+    return Array.from(byId.entries())
+      .map(([user_id, username]) => ({ user_id, username }))
+      .sort((a, b) => a.username.localeCompare(b.username, undefined, { sensitivity: "base" }));
+  }, [items]);
 
   const filteredItems = useMemo(() => {
     const q = itemFilter.trim().toLowerCase();
@@ -1305,11 +1325,22 @@ export function Watchlist({
           return haystack.includes(q);
         })
       : items;
+    if (watcherFilter !== "any") {
+      list = list.filter((item) => {
+        const watch = item.user_watch ?? [];
+        if (watcherFilter === "not_me") {
+          const mine = watch.find((w) => w.user_id === user.id);
+          return !mine || !mine.watched;
+        }
+        const entry = watch.find((w) => w.user_id === watcherFilter);
+        return !!entry?.watched;
+      });
+    }
     if (section === "watched") {
       list = sortWatchedItems(list, watchedSort);
     }
     return list;
-  }, [items, itemFilter, section, watchedSort]);
+  }, [items, itemFilter, section, watchedSort, watcherFilter, user.id]);
 
   const applyCounts = useCallback(
     (groupId: number, counts: { to_watch: number; watched: number; needs_rating?: number }) => {
@@ -1328,27 +1359,44 @@ export function Watchlist({
   );
 
   const loadGroups = useCallback(() => {
-    api.watchlistGroups().then((r) => {
-      setGroups(r.groups);
-      setUngroupedCounts({
-        to_watch: r.ungrouped_counts.to_watch,
-        watched: r.ungrouped_counts.watched,
-        needs_rating: r.ungrouped_counts.needs_rating ?? 0,
+    api
+      .watchlistGroups()
+      .then((r) => {
+        setGroups(r.groups);
+        setUngroupedCounts({
+          to_watch: r.ungrouped_counts.to_watch,
+          watched: r.ungrouped_counts.watched,
+          needs_rating: r.ungrouped_counts.needs_rating ?? 0,
+        });
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "Could not load watchlist groups");
       });
-    });
   }, []);
 
   const loadItems = useCallback(() => {
+    const seq = ++loadItemsSeqRef.current;
     setLoading(true);
     api
       .watchlistGroupItems(selectedGroupId, section)
       .then((r) => {
+        if (seq !== loadItemsSeqRef.current) return;
         setItems(r.items);
         if (r.counts) applyCounts(selectedGroupId, r.counts);
       })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
+      .catch((e) => {
+        if (seq !== loadItemsSeqRef.current) return;
+        setError(e.message);
+      })
+      .finally(() => {
+        if (seq !== loadItemsSeqRef.current) return;
+        setLoading(false);
+      });
   }, [selectedGroupId, section, applyCounts]);
+
+  useEffect(() => {
+    loadItemsRef.current = loadItems;
+  }, [loadItems]);
 
   useEffect(() => {
     loadGroups();
@@ -1364,6 +1412,10 @@ export function Watchlist({
     onGroupChange?.(id);
   };
 
+  const pickSection = (next: "to_watch" | "watched") => {
+    onSectionChange?.(next);
+  };
+
   useEffect(() => {
     setItemFilter("");
   }, [section, selectedGroupId]);
@@ -1375,15 +1427,30 @@ export function Watchlist({
   useEffect(() => {
     if (refreshVersion > 0) {
       loadGroups();
-      loadItems();
+      loadItemsRef.current();
     }
-  }, [refreshVersion, loadGroups, loadItems]);
+  }, [refreshVersion, loadGroups]);
 
   const createGroup = async () => {
     if (!newGroupName.trim()) return;
-    await api.watchlistCreateGroup(newGroupName.trim());
-    setNewGroupName("");
-    loadGroups();
+    try {
+      await api.watchlistCreateGroup(newGroupName.trim());
+      setNewGroupName("");
+      loadGroups();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not create group");
+    }
+  };
+
+  const createGroupFromTemplate = async (name: string) => {
+    if (!name) return;
+    try {
+      await api.watchlistCreateGroup(name);
+      pushToast(`Created group "${name}"`, "success");
+      loadGroups();
+    } catch (err: unknown) {
+      pushToast(err instanceof Error ? err.message : "Could not create group", "error");
+    }
   };
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -1393,9 +1460,16 @@ export function Watchlist({
     if (!over || active.id === over.id) return;
     const oldIdx = items.findIndex((i) => i.id === active.id);
     const newIdx = items.findIndex((i) => i.id === over.id);
+    if (oldIdx < 0 || newIdx < 0) return;
+    const prev = items;
     const next = arrayMove(items, oldIdx, newIdx);
     setItems(next);
-    api.watchlistReorder(next.map((it, idx) => ({ id: it.id, sort_order: idx, group_id: selectedGroupId || null })));
+    api
+      .watchlistReorder(next.map((it, idx) => ({ id: it.id, sort_order: idx, group_id: selectedGroupId || null })))
+      .catch((err: unknown) => {
+        setItems(prev);
+        setError(err instanceof Error ? err.message : "Could not reorder watchlist");
+      });
   };
 
   const updateItem = (updated: WatchlistItem) => {
@@ -1417,7 +1491,9 @@ export function Watchlist({
         setItems(r.items);
         if (r.counts) applyCounts(selectedGroupId, r.counts);
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "Could not refresh watchlist");
+      });
     loadGroups();
   };
 
@@ -1565,20 +1641,36 @@ export function Watchlist({
               <Plus className="h-4 w-4" />
             </button>
           </div>
+          <select
+            className="input mt-1 text-xs"
+            value=""
+            onChange={(e) => {
+              const name = e.target.value;
+              e.target.value = "";
+              createGroupFromTemplate(name);
+            }}
+          >
+            <option value="">From template…</option>
+            {GROUP_TEMPLATES.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => setSection("to_watch")}
+              onClick={() => pickSection("to_watch")}
               className={section === "to_watch" ? "btn-primary" : "btn-ghost"}
             >
               To Watch ({counts.to_watch})
             </button>
             <button
               type="button"
-              onClick={() => setSection("watched")}
+              onClick={() => pickSection("watched")}
               className={section === "watched" ? "btn-primary" : "btn-ghost"}
             >
               <span className="inline-flex items-center gap-1.5">
@@ -1619,6 +1711,27 @@ export function Watchlist({
               </p>
             )}
           </div>
+
+          <label className="flex w-full flex-wrap items-center gap-2 text-xs text-slate-400 sm:w-auto">
+            <span className="shrink-0">Watched by</span>
+            <select
+              className="input max-w-full py-1 text-xs sm:max-w-[14rem]"
+              value={String(watcherFilter)}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "any" || v === "not_me") setWatcherFilter(v);
+                else setWatcherFilter(Number(v));
+              }}
+            >
+              <option value="any">Anyone</option>
+              <option value="not_me">Not me</option>
+              {watcherOptions.map((u) => (
+                <option key={u.user_id} value={u.user_id}>
+                  {u.username}
+                </option>
+              ))}
+            </select>
+          </label>
 
           {section === "watched" && (
             <label className="flex w-full flex-wrap items-center gap-2 text-xs text-slate-400 sm:w-auto">
@@ -1682,7 +1795,7 @@ export function Watchlist({
             </div>
           ) : filteredItems.length === 0 ? (
             <div className="py-12 text-center text-sm text-slate-500">
-              No titles match &ldquo;{itemFilter.trim()}&rdquo;.
+              {itemFilter.trim() ? <>No titles match &ldquo;{itemFilter.trim()}&rdquo;.</> : "No titles match the current filters."}
             </div>
           ) : (
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>

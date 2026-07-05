@@ -1,12 +1,12 @@
 import statistics
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from .. import auth
 from ..db import get_db
-from ..models import User, UserRating, UserWatchStatus, WatchlistComment, WatchlistItem, WatchlistGroup
+from ..models import User, UserRating, UserWatchStatus, WatchlistComment, WatchlistGroup, WatchlistItem
 from ..watchlist.exclusions import (
     ExclusionContext,
     filter_ratings_for_item,
@@ -294,45 +294,104 @@ def get_stats(
     user_leaderboard = []
     root_ids = [r.id for r in roots]
     leaderboard_users = stats_users_all if selected_ids is not None else all_users
+
+    # Prefetch all watch-status rows and ratings needed by the loop below so we
+    # avoid one UserWatchStatus/UserRating/WatchlistItem query per (user, item)
+    # combination (see plans/006-stats-n-plus-one.md).
+    all_item_ids: set[int] = set(root_ids)
+    for kids in by_parent.values():
+        all_item_ids.update(c.id for c in kids)
+    for eps in nested.values():
+        all_item_ids.update(e.id for e in eps)
+
+    watched_lookup: set[tuple[int, int]] = set()
+    if all_item_ids:
+        # Not expected to exceed SQLite's `IN` limits at this app's scale; chunk
+        # here if `all_item_ids` ever grows past ~30k.
+        rows = (
+            db.query(UserWatchStatus.user_id, UserWatchStatus.item_id)
+            .filter(
+                UserWatchStatus.watched.is_(True),
+                UserWatchStatus.item_id.in_(all_item_ids),
+            )
+            .all()
+        )
+        watched_lookup = {(row[0], row[1]) for row in rows}
+
+    ratings_by_user: dict[int, list[UserRating]] = {}
+    if root_ids:
+        leaderboard_user_ids = [u.id for u in leaderboard_users]
+        all_ratings = (
+            db.query(UserRating)
+            .join(WatchlistItem, WatchlistItem.id == UserRating.item_id)
+            .filter(
+                UserRating.user_id.in_(leaderboard_user_ids),
+                UserRating.stars > 0,
+                WatchlistItem.parent_id.is_(None),
+                WatchlistItem.id.in_(root_ids),
+            )
+            .all()
+        )
+        for rating in all_ratings:
+            ratings_by_user.setdefault(rating.user_id, []).append(rating)
+
+    roots_by_id = {r.id: r for r in roots}
+    needs_rating: list[dict] = []
+    NEEDS_RATING_CAP = 10
+
     for u in leaderboard_users:
         finished = 0
+        rated_root_ids = {r.item_id for r in ratings_by_user.get(u.id, [])}
+        user_needs_rating_titles: list[dict] = []
         for root in roots:
             children = by_parent.get(root.id, []) if root.kind in ("series", "collection") else []
             child_nested = nested if root.kind == "collection" else None
-            if not _user_root_watched(db, u.id, root, children, child_nested):
+            if not _user_root_watched(
+                db, u.id, root, children, child_nested, watched_lookup=watched_lookup
+            ):
                 continue
             scope_ids = participation_scope_ids(db, root, children, child_nested)
             if is_hidden_from_item(exclusion_ctx, db, u, root, scope_ids):
                 continue
             finished += 1
+            if root.id not in rated_root_ids:
+                watched_at = _user_completion_at(db, u.id, root, children)
+                user_needs_rating_titles.append(
+                    {
+                        "item_id": root.id,
+                        "title": root.title,
+                        "watched_at": watched_at.isoformat() if watched_at else None,
+                    }
+                )
+
+        if user_needs_rating_titles:
+            user_needs_rating_titles.sort(key=lambda t: t["watched_at"] or "", reverse=True)
+            more = max(0, len(user_needs_rating_titles) - NEEDS_RATING_CAP)
+            needs_rating.append(
+                {
+                    "user_id": u.id,
+                    "username": u.username,
+                    "titles": user_needs_rating_titles[:NEEDS_RATING_CAP],
+                    "more": more,
+                }
+            )
 
         given_values: list[float] = []
-        if root_ids:
-            given = (
-                db.query(UserRating)
-                .join(WatchlistItem, WatchlistItem.id == UserRating.item_id)
-                .filter(
-                    UserRating.user_id == u.id,
-                    UserRating.stars > 0,
-                    WatchlistItem.parent_id.is_(None),
-                    WatchlistItem.id.in_(root_ids),
-                )
-                .all()
+        given = ratings_by_user.get(u.id, [])
+        for rating in given:
+            item = roots_by_id.get(rating.item_id)
+            if not item:
+                continue
+            child_list = by_parent.get(item.id, []) if item.kind in ("series", "collection") else []
+            scope_ids = participation_scope_ids(
+                db,
+                item,
+                child_list,
+                nested if item.kind == "collection" else None,
             )
-            for rating in given:
-                item = db.get(WatchlistItem, rating.item_id)
-                if not item:
-                    continue
-                child_list = by_parent.get(item.id, []) if item.kind in ("series", "collection") else []
-                scope_ids = participation_scope_ids(
-                    db,
-                    item,
-                    child_list,
-                    nested if item.kind == "collection" else None,
-                )
-                if is_hidden_from_item(exclusion_ctx, db, u, item, scope_ids):
-                    continue
-                given_values.append(rating.stars)
+            if is_hidden_from_item(exclusion_ctx, db, u, item, scope_ids):
+                continue
+            given_values.append(rating.stars)
         user_leaderboard.append(
             {
                 "user_id": u.id,
@@ -402,5 +461,108 @@ def get_stats(
             lambda t: t["comment_count"],
         ),
         "user_leaderboard": user_leaderboard,
+        "needs_rating": needs_rating,
         "profile": profile,
+    }
+
+
+@router.get("/timeline")
+def get_stats_timeline(
+    db: Session = Depends(get_db),
+    _: auth.CurrentUser = Depends(auth.require_auth),
+    days: int = Query(90, ge=1, le=3650, description="Number of trailing days to summarize"),
+):
+    """Fun-facts timeline: daily watch/rating activity + rating lag.
+
+    Not exclusion-aware: `users_for_item_stats` is scoped per-title (needs an
+    `item` + `scope_ids`), which doesn't map cleanly onto a global date-range
+    aggregate, so this endpoint counts activity from all users rather than
+    reusing that helper. This is a fun-facts endpoint, not a fairness-critical
+    one (see plan 018 Part B).
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    since_naive = since.replace(tzinfo=None)
+
+    watch_rows = (
+        db.query(UserWatchStatus.watched_at)
+        .filter(
+            UserWatchStatus.watched.is_(True),
+            UserWatchStatus.watched_at.isnot(None),
+            UserWatchStatus.watched_at >= since_naive,
+        )
+        .all()
+    )
+    rating_rows = (
+        db.query(UserRating.rated_at)
+        .filter(
+            UserRating.stars > 0,
+            UserRating.rated_at.isnot(None),
+            UserRating.rated_at >= since_naive,
+        )
+        .all()
+    )
+
+    def _by_day(rows) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for (dt,) in rows:
+            if dt is None:
+                continue
+            key = dt.date().isoformat()
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    watch_by_day = _by_day(watch_rows)
+    rating_by_day = _by_day(rating_rows)
+
+    watch_counts = [{"date": d, "count": c} for d, c in sorted(watch_by_day.items())]
+    rating_counts = [{"date": d, "count": c} for d, c in sorted(rating_by_day.items())]
+
+    busiest_day = None
+    combined: dict[str, int] = {}
+    for d, c in watch_by_day.items():
+        combined[d] = combined.get(d, 0) + c
+    for d, c in rating_by_day.items():
+        combined[d] = combined.get(d, 0) + c
+    if combined:
+        best_date = max(combined, key=lambda d: (combined[d], d))
+        busiest_day = {"date": best_date, "count": combined[best_date]}
+
+    # Median days between watched_at and rated_at for (user, item) pairs where
+    # both a watch and a rating exist. Trivial data volume for this app's
+    # scale, so this is computed in Python rather than in SQL.
+    watched_pairs = (
+        db.query(UserWatchStatus.user_id, UserWatchStatus.item_id, UserWatchStatus.watched_at)
+        .filter(
+            UserWatchStatus.watched.is_(True),
+            UserWatchStatus.watched_at.isnot(None),
+        )
+        .all()
+    )
+    watched_at_by_pair = {(row[0], row[1]): row[2] for row in watched_pairs}
+
+    rated_pairs = (
+        db.query(UserRating.user_id, UserRating.item_id, UserRating.rated_at)
+        .filter(
+            UserRating.stars > 0,
+            UserRating.rated_at.isnot(None),
+        )
+        .all()
+    )
+
+    lag_days: list[float] = []
+    for user_id, item_id, rated_at in rated_pairs:
+        watched_at = watched_at_by_pair.get((user_id, item_id))
+        if watched_at is None:
+            continue
+        delta = (rated_at - watched_at).total_seconds() / 86400.0
+        lag_days.append(delta)
+
+    rating_lag_days = round(statistics.median(lag_days), 2) if lag_days else None
+
+    return {
+        "days": days,
+        "watch_counts": watch_counts,
+        "rating_counts": rating_counts,
+        "busiest_day": busiest_day,
+        "rating_lag_days": rating_lag_days,
     }

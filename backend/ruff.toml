@@ -1,0 +1,7 @@
+line-length = 120
+target-version = "py310"
+
+[lint]
+# Start with the high-signal default set; expand later.
+select = ["E4", "E7", "E9", "F", "I"]
+exclude = [".venv", "__pycache__", "data"]

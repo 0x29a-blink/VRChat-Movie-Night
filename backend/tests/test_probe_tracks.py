@@ -1,6 +1,5 @@
 """ffprobe track probing (FFmpeg 8+ compatibility)."""
 
-from pathlib import Path
 
 from app.config import settings
 from app.library.playback import probe_media_tracks

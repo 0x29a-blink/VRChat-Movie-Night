@@ -345,11 +345,11 @@ hlsAlwaysRemux: true
 # See MediaMTX/LATENCY.md before switching away from mpegts.
 hlsVariant: mpegts
 # Segments kept on disk (DVR window). Does not add much latency; smaller = less rewind buffer.
-hlsSegmentCount: 4
+hlsSegmentCount: 7
 # Segment length — main latency knob for mpegts HLS. Players often buffer ~3 segments.
 # Was 4s (~12s+ behind live). 1s targets ~3–5s from MediaMTX before OBS/VRChat buffer.
 # Match OBS keyframe interval ~2s (encoder settings / stream presets).
-hlsSegmentDuration: 1s
+hlsSegmentDuration: 4s
 # Used when hlsVariant is lowLatency (LL-HLS). Ignored for mpegts.
 hlsPartDuration: 200ms
 # Maximum size of each segment.

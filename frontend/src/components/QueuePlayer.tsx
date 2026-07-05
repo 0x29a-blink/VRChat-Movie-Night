@@ -30,13 +30,16 @@ import {
   Repeat,
   Copy,
   StopCircle,
+  Zap,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { copyHlsUrl } from "../hlsUrl";
 import { fmtMs } from "../format";
-import type { PlayerState, QueueItem, QueueSnapshot } from "../types";
+import type { AppEvent, MovieNightSession, PlayerState, QueueItem, QueueSnapshot, UserInfo } from "../types";
+import { ActivityFeed } from "./ActivityFeed";
 import { PlaybackTracksPanel } from "./PlaybackTracksPanel";
+import { SessionPanel } from "./SessionPanel";
 import { useToast } from "./Toast";
 
 interface Props {
@@ -44,9 +47,27 @@ interface Props {
   player: PlayerState | null;
   obs: { connected: boolean; streaming: boolean };
   onObs: (o: { connected: boolean; streaming: boolean }) => void;
+  activityEvent?: AppEvent | null;
+  user: UserInfo;
+  session: MovieNightSession | null;
+  onSessionChange: (session: MovieNightSession | null) => void;
+  /** Bumped when the app's library/watchlist state changes (e.g. a download
+   * auto-linked to a watchlist item) — lets SessionPanel refetch the session
+   * so `needs_download` flips once the pick's file lands. */
+  libraryVersion?: number;
 }
 
-export function QueuePlayer({ queue, player, obs, onObs }: Props) {
+export function QueuePlayer({
+  queue,
+  player,
+  obs,
+  onObs,
+  activityEvent,
+  user,
+  session,
+  onSessionChange,
+  libraryVersion,
+}: Props) {
   const { push: pushToast } = useToast();
   const [items, setItems] = useState<QueueItem[]>(queue.items);
   const [volume, setVolume] = useState(100);
@@ -92,16 +113,20 @@ export function QueuePlayer({ queue, player, obs, onObs }: Props) {
     if (!over || active.id === over.id) return;
     const oldIdx = items.findIndex((i) => i.id === active.id);
     const newIdx = items.findIndex((i) => i.id === over.id);
+    if (oldIdx < 0 || newIdx < 0) return;
+    const prev = items;
     const next = arrayMove(items, oldIdx, newIdx);
     setItems(next);
     api.queueReorder(next.map((i) => i.id)).catch((err: unknown) => {
+      setItems(prev);
       pushToast(err instanceof Error ? err.message : "Could not reorder queue", "error");
     });
   };
 
   const playing = player?.media_state === "OBS_MEDIA_STATE_PLAYING";
+  const anyPreparing = items.some((i) => i.prepare_status === "preparing");
   const cur = queue.current;
-  const duration = player?.duration || cur?.duration ? player?.duration || 0 : 0;
+  const duration = player?.duration || cur?.duration || 0;
   const cursor = player?.cursor || 0;
   const pct = duration > 0 ? (cursor / duration) * 100 : 0;
 
@@ -145,6 +170,14 @@ export function QueuePlayer({ queue, player, obs, onObs }: Props) {
 
   return (
     <div className="space-y-6">
+      <SessionPanel
+        session={session}
+        onSessionChange={onSessionChange}
+        player={player}
+        user={user}
+        libraryVersion={libraryVersion}
+      />
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Queue &amp; Player</h1>
@@ -300,9 +333,19 @@ export function QueuePlayer({ queue, player, obs, onObs }: Props) {
             Up next · {items.length}
           </h2>
           {items.length > 0 && (
-            <button onClick={act("Clear queue", () => api.queueClear())} className="btn-ghost text-xs text-slate-400">
-              <Trash2 className="h-3.5 w-3.5" /> Clear queue
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={act("Prepare queue", () => api.queuePrepareAll())}
+                disabled={anyPreparing}
+                className="btn-ghost text-xs text-slate-400 disabled:opacity-50"
+                title="Pre-remux queued items in the background so playback starts instantly"
+              >
+                <Zap className="h-3.5 w-3.5" /> {anyPreparing ? "Preparing…" : "Prepare queue"}
+              </button>
+              <button onClick={act("Clear queue", () => api.queueClear())} className="btn-ghost text-xs text-slate-400">
+                <Trash2 className="h-3.5 w-3.5" /> Clear queue
+              </button>
+            </div>
           )}
         </div>
 
@@ -330,8 +373,30 @@ export function QueuePlayer({ queue, player, obs, onObs }: Props) {
           </DndContext>
         )}
       </section>
+
+      <ActivityFeed liveEvent={activityEvent} />
     </div>
   );
+}
+
+function PrepareBadge({ status }: { status: string }) {
+  if (status === "ready") {
+    return <span className="chip shrink-0 bg-emerald-500/15 text-[10px] text-emerald-300">Ready</span>;
+  }
+  if (status === "preparing" || status === "pending") {
+    return <span className="chip shrink-0 bg-sky-500/15 text-[10px] text-sky-300">Preparing…</span>;
+  }
+  if (status.startsWith("failed:")) {
+    return (
+      <span
+        className="chip shrink-0 bg-red-500/15 text-[10px] text-red-300"
+        title={status.slice("failed:".length)}
+      >
+        Prepare failed
+      </span>
+    );
+  }
+  return null;
 }
 
 function Ctrl({
@@ -400,7 +465,11 @@ function Row({
             {item.title}
           </div>
           {isCurrent && <div className="text-[11px] text-brand-300">Playing</div>}
+          {item.queued_by && (
+            <div className="truncate text-[11px] text-slate-500">Queued by {item.queued_by}</div>
+          )}
         </div>
+        <PrepareBadge status={item.prepare_status || ""} />
         {canEditTracks && (
           <button
             type="button"
