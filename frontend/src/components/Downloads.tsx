@@ -1,19 +1,24 @@
-import { Film, Link2, Loader2, Youtube } from "lucide-react";
+import { ChevronDown, ChevronRight, LayoutGrid, Link2, Loader2, Search as SearchIcon, Sparkles, Youtube } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { Job, UserInfo } from "../types";
 import { canLocalDownload } from "../localDownload";
 import type { StreamLaunch } from "../streamOpenUrl";
+import { readNavFromLocation, writeNavToLocation, type AddSource } from "../appNav";
 import { ConfirmModal } from "./ConfirmModal";
 import { DownloadJobCard } from "./DownloadJobCard";
 import { Search } from "./Search";
 
-type Tab = "youtube" | "m3u8" | "search";
-
-const TABS: { id: Tab; label: string; icon: typeof Youtube }[] = [
-  { id: "youtube", label: "YouTube", icon: Youtube },
-  { id: "m3u8", label: "M3U8 / Stream", icon: Link2 },
-  { id: "search", label: "Movies & Shows", icon: Film },
+// Plan 026 (Add Media flatten): a single flat, URL-addressable source picker
+// replaces the old 4-level nesting (tab -> TABS -> Search mode -> Browse
+// source). Downloads.tsx is now the coordinator: it renders the picker and
+// routes to the right child, keeping Search.tsx/Browse.tsx internals intact.
+const SOURCES: { id: AddSource; label: string; icon: typeof Youtube }[] = [
+  { id: "search", label: "Search", icon: SearchIcon },
+  { id: "browse", label: "Browse", icon: LayoutGrid },
+  { id: "anime", label: "Anime", icon: Sparkles },
+  { id: "youtube", label: "YouTube / URL", icon: Youtube },
+  { id: "m3u8", label: "M3U8", icon: Link2 },
 ];
 
 const ACTIVE_STATUSES = new Set<Job["status"]>(["queued", "caching", "downloading"]);
@@ -33,13 +38,21 @@ export function Downloads({
   onInitialStreamOpenHandled?: () => void;
   user: UserInfo;
 }) {
-  const [tab, setTab] = useState<Tab>(() => (initialStreamLaunch ? "search" : "youtube"));
+  const [source, setSource] = useState<AddSource>(
+    () => (initialStreamLaunch ? "search" : readNavFromLocation().addSource ?? "youtube")
+  );
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [clearing, setClearing] = useState<"completed" | "failed" | null>(null);
   const [clearBusy, setClearBusy] = useState(false);
 
   useEffect(() => {
-    if (initialStreamLaunch) setTab("search");
+    if (initialStreamLaunch) setSource("search");
   }, [initialStreamLaunch]);
+
+  const selectSource = (next: AddSource) => {
+    setSource(next);
+    writeNavToLocation({ tab: "add", addSource: next });
+  };
 
   const active = jobs.filter((j) => ACTIVE_STATUSES.has(j.status));
   const finished = jobs.filter((j) => !ACTIVE_STATUSES.has(j.status));
@@ -61,7 +74,7 @@ export function Downloads({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Downloads</h1>
+        <h1 className="text-2xl font-semibold">Add Media</h1>
         <p className="mt-1 text-sm text-slate-400">
           Grab videos at maximum quality. Everything lands in your Library.
         </p>
@@ -69,29 +82,51 @@ export function Downloads({
 
       <div className="card overflow-x-auto overflow-y-visible">
         <div className="flex border-b border-white/5">
-          {TABS.map((t) => {
-            const Icon = t.icon;
+          {SOURCES.map((s) => {
+            const Icon = s.icon;
             return (
               <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
+                key={s.id}
+                onClick={() => selectSource(s.id)}
                 className={`flex flex-1 items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
-                  tab === t.id ? "bg-white/5 text-white" : "text-slate-400 hover:text-slate-200"
+                  source === s.id ? "bg-white/5 text-white" : "text-slate-400 hover:text-slate-200"
                 }`}
               >
                 <Icon className="h-4 w-4" />
-                {t.label}
+                {s.label}
               </button>
             );
           })}
         </div>
         <div className="p-5">
-          {tab === "youtube" && <SimpleForm kind="youtube" onDone={onChanged} />}
-          {tab === "m3u8" && <SimpleForm kind="m3u8" onDone={onChanged} />}
-          {tab === "search" && (
+          {source === "youtube" && <SimpleForm kind="youtube" onDone={onChanged} />}
+          {source === "m3u8" && <SimpleForm kind="m3u8" onDone={onChanged} />}
+          {source === "search" && (
             <Search
+              key="search"
+              initialMode="search"
+              hideModeToggle
               initialStreamLaunch={initialStreamLaunch}
               onInitialStreamOpenHandled={onInitialStreamOpenHandled}
+              allowLocalDownload={canLocalDownload(user)}
+            />
+          )}
+          {source === "browse" && (
+            <Search
+              key="browse"
+              initialMode="browse"
+              hideModeToggle
+              browseSource="collections"
+              allowLocalDownload={canLocalDownload(user)}
+            />
+          )}
+          {source === "anime" && (
+            <Search
+              key="anime"
+              initialMode="browse"
+              hideModeToggle
+              browseSource="aiostreams"
+              autoOpenAnime
               allowLocalDownload={canLocalDownload(user)}
             />
           )}
@@ -109,30 +144,46 @@ export function Downloads({
 
       {finished.length > 0 && (
         <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">History</h2>
-            <div className="flex gap-2">
-              {hasCompleted && (
-                <button
-                  onClick={() => setClearing("completed")}
-                  className="btn-ghost px-2 py-1 text-xs"
-                >
-                  Clear completed
-                </button>
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((v) => !v)}
+            className="flex w-full items-center justify-between gap-2 text-left"
+            aria-expanded={historyOpen}
+          >
+            <span className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-slate-400">
+              {historyOpen ? (
+                <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5 shrink-0" />
               )}
-              {hasFailed && (
-                <button
-                  onClick={() => setClearing("failed")}
-                  className="btn-ghost px-2 py-1 text-xs"
-                >
-                  Clear failed
-                </button>
-              )}
-            </div>
-          </div>
-          {finished.map((j) => (
-            <DownloadJobCard key={j.id} job={j} onRemoved={onJobRemoved} />
-          ))}
+              History ({finished.length})
+            </span>
+          </button>
+          {historyOpen && (
+            <>
+              <div className="flex justify-end gap-2">
+                {hasCompleted && (
+                  <button
+                    onClick={() => setClearing("completed")}
+                    className="btn-ghost px-2 py-1 text-xs"
+                  >
+                    Clear completed
+                  </button>
+                )}
+                {hasFailed && (
+                  <button
+                    onClick={() => setClearing("failed")}
+                    className="btn-ghost px-2 py-1 text-xs"
+                  >
+                    Clear failed
+                  </button>
+                )}
+              </div>
+              {finished.map((j) => (
+                <DownloadJobCard key={j.id} job={j} onRemoved={onJobRemoved} />
+              ))}
+            </>
+          )}
         </section>
       )}
 

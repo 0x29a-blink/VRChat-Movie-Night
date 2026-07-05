@@ -33,14 +33,28 @@ function parseAppTab(value: string | null): AppTab | null {
 
 export type WatchlistSection = "to_watch" | "watched";
 
+// AddSource backs the "Add Media" flattened source picker (plan 026):
+// a single segmented control replacing the old 4-level nesting
+// (tab -> Downloads TABS -> Search mode -> Browse source). Lives in the
+// URL as `sub` so `?tab=add&sub=anime` is a 1-click deep link.
+export type AddSource = "search" | "browse" | "anime" | "youtube" | "m3u8";
+
 export type NavState = {
   tab: AppTab;
   watchlistGroupId?: number;
   watchlistSection?: WatchlistSection;
+  addSource?: AddSource;
 };
 
 function parseWatchlistSection(value: string | null): WatchlistSection | undefined {
   if (value === "watched" || value === "to_watch") return value;
+  return undefined;
+}
+
+const VALID_ADD_SOURCES = new Set<AddSource>(["search", "browse", "anime", "youtube", "m3u8"]);
+
+function parseAddSource(value: string | null): AddSource | undefined {
+  if (value && VALID_ADD_SOURCES.has(value as AddSource)) return value as AddSource;
   return undefined;
 }
 
@@ -50,6 +64,7 @@ export function readNavFromLocation(): NavState {
     tab: parseAppTab(params.get("tab")) ?? "tonight",
     watchlistGroupId: params.has("group") ? Number(params.get("group")) : undefined,
     watchlistSection: parseWatchlistSection(params.get("section")),
+    addSource: parseAddSource(params.get("sub")),
   };
 }
 
@@ -70,6 +85,11 @@ export function writeNavToLocation(state: NavState, preserveStreamParams = false
     params.set("section", "watched");
   } else {
     params.delete("section");
+  }
+  if (state.tab === "add" && state.addSource) {
+    params.set("sub", state.addSource);
+  } else {
+    params.delete("sub");
   }
   const qs = params.toString();
   const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;

@@ -409,12 +409,18 @@ function titleRowsFromSearchResults(
 export function Browse({
   onPickTitle,
   allowLocalDownload = false,
+  initialSource = "collections",
+  autoOpenAnime = false,
 }: {
   onPickTitle: (r: SearchResult) => void;
   allowLocalDownload?: boolean;
+  // Plan 026 (Add Media flatten): let the coordinator (Downloads.tsx) land
+  // directly on a source, e.g. Anime, without the user re-clicking here.
+  initialSource?: BrowseSource;
+  autoOpenAnime?: boolean;
 }) {
   const { push: pushToast } = useToast();
-  const [source, setSource] = useState<BrowseSource>("collections");
+  const [source, setSource] = useState<BrowseSource>(initialSource);
   const [error, setError] = useState("");
   const [torboxDownloadBusy, setTorboxDownloadBusy] = useState<string | null>(null);
 
@@ -534,6 +540,11 @@ export function Browse({
     setCatalogFilter("anime");
     if (animeCatalogKey) setSelectedCatalogKey(animeCatalogKey);
   };
+
+  useEffect(() => {
+    if (autoOpenAnime) openAnimeBrowse();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenAnime]);
 
   useEffect(() => {
     if (source === "aiostreams") loadCatalogs();

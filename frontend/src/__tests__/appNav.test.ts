@@ -12,6 +12,7 @@ describe("readNavFromLocation", () => {
       tab: "tonight",
       watchlistGroupId: undefined,
       watchlistSection: undefined,
+      addSource: undefined,
     });
   });
 
@@ -81,6 +82,7 @@ describe("writeNavToLocation + readNavFromLocation round-trip", () => {
       tab: "library",
       watchlistGroupId: undefined,
       watchlistSection: undefined,
+      addSource: undefined,
     });
     expect(window.location.search).not.toContain("group");
     expect(window.location.search).not.toContain("section");
@@ -100,5 +102,56 @@ describe("writeNavToLocation + readNavFromLocation round-trip", () => {
     writeNavToLocation({ tab: "add" }, true);
     const params = new URLSearchParams(window.location.search);
     expect(params.get("open")).toBe("1");
+  });
+});
+
+describe("appNav addSource (plan 026 Add Media flatten)", () => {
+  it("deep-links ?tab=add&sub=anime", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=anime");
+    const nav = readNavFromLocation();
+    expect(nav.tab).toBe("add");
+    expect(nav.addSource).toBe("anime");
+  });
+
+  it("parses every valid addSource value", () => {
+    for (const sub of ["search", "browse", "anime", "youtube", "m3u8"] as const) {
+      window.history.replaceState({}, "", `/?tab=add&sub=${sub}`);
+      expect(readNavFromLocation().addSource).toBe(sub);
+    }
+  });
+
+  it("falls back to undefined for a garbage sub value", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=not-a-real-source");
+    expect(readNavFromLocation().addSource).toBeUndefined();
+  });
+
+  it("ignores sub when the tab isn't add", () => {
+    window.history.replaceState({}, "", "/?tab=library&sub=anime");
+    const nav = readNavFromLocation();
+    expect(nav.tab).toBe("library");
+    // sub is still parsed regardless of tab (mirrors group/section parsing),
+    // but writeNavToLocation only persists it for the add tab.
+    expect(nav.addSource).toBe("anime");
+  });
+
+  it("round-trips addSource through writeNavToLocation", () => {
+    writeNavToLocation({ tab: "add", addSource: "youtube" });
+    const nav = readNavFromLocation();
+    expect(nav.tab).toBe("add");
+    expect(nav.addSource).toBe("youtube");
+    expect(window.location.search).toContain("sub=youtube");
+  });
+
+  it("drops sub from the URL when writing a non-add tab", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=anime");
+    writeNavToLocation({ tab: "library" });
+    expect(window.location.search).not.toContain("sub");
+    expect(readNavFromLocation().addSource).toBeUndefined();
+  });
+
+  it("drops sub from the URL when writing the add tab without an addSource", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=anime");
+    writeNavToLocation({ tab: "add" });
+    expect(window.location.search).not.toContain("sub");
   });
 });

@@ -85,13 +85,25 @@ export function Search({
   initialStreamLaunch,
   onInitialStreamOpenHandled,
   allowLocalDownload = false,
+  initialMode = "search",
+  hideModeToggle = false,
+  browseSource,
+  autoOpenAnime = false,
 }: {
   initialStreamLaunch?: StreamLaunch | null;
   onInitialStreamOpenHandled?: () => void;
   allowLocalDownload?: boolean;
+  // Plan 026 (Add Media flatten): Downloads.tsx now owns the top-level
+  // Search|Browse|Anime|YouTube|M3U8 picker and remounts this component
+  // (via `key`) per segment, so the internal Search/Browse toggle below
+  // becomes redundant chrome for those entry points.
+  initialMode?: MoviesMode;
+  hideModeToggle?: boolean;
+  browseSource?: "collections" | "aiostreams";
+  autoOpenAnime?: boolean;
 }) {
   const { push: pushToast } = useToast();
-  const [mode, setMode] = useState<MoviesMode>("search");
+  const [mode, setMode] = useState<MoviesMode>(initialMode);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -634,42 +646,46 @@ export function Search({
 
   return (
     <div className="min-w-0 space-y-5">
-      <div className="flex gap-2 border-b border-white/5 pb-3">
-        <button
-          type="button"
-          onClick={() => {
-            setMode("search");
-            setError("");
-          }}
-          className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${
-            mode === "search" ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"
-          }`}
-        >
-          <SearchIcon className="h-4 w-4" />
-          Search
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setMode("browse");
-            setSelected(null);
-            setStreams([]);
-            setError("");
-          }}
-          className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${
-            mode === "browse" ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"
-          }`}
-        >
-          <LayoutGrid className="h-4 w-4" />
-          Browse
-        </button>
-      </div>
+      {!hideModeToggle && (
+        <div className="flex gap-2 border-b border-white/5 pb-3">
+          <button
+            type="button"
+            onClick={() => {
+              setMode("search");
+              setError("");
+            }}
+            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${
+              mode === "search" ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <SearchIcon className="h-4 w-4" />
+            Search
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMode("browse");
+              setSelected(null);
+              setStreams([]);
+              setError("");
+            }}
+            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${
+              mode === "browse" ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <LayoutGrid className="h-4 w-4" />
+            Browse
+          </button>
+        </div>
+      )}
 
       {mode === "browse" && (
         <div className={selected ? "hidden" : undefined}>
           <Browse
             onPickTitle={(r) => pickTitle(r, { fromBrowse: true })}
             allowLocalDownload={allowLocalDownload}
+            initialSource={browseSource}
+            autoOpenAnime={autoOpenAnime}
           />
         </div>
       )}
