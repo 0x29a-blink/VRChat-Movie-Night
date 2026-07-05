@@ -45,11 +45,18 @@ class Settings(BaseSettings):
     ytdlp_path: str = "yt-dlp"
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
-    aria2c_path: str = "aria2c"
 
     # Filesystem
     library_root: str = str(PROJECT_ROOT / "library")
     data_dir: str = str(BACKEND_DIR / "data")
+
+    # Optional Cloudflare Tunnel / reverse proxy (off by default — local LAN unchanged)
+    behind_proxy: bool = False
+    # Comma-separated extra CORS origins (e.g. https://movienight.yourdomain.com for Vite dev)
+    cors_origins: str = ""
+    # Full HTTPS base for VRChat HLS when MediaMTX is on a separate tunnel hostname
+    # e.g. https://stream.yourdomain.com  (no trailing slash)
+    hls_public_base_url: str = ""
 
     @property
     def library_path(self) -> Path:

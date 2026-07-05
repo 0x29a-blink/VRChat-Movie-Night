@@ -1,4 +1,6 @@
 import {
+  ChevronDown,
+  ChevronRight,
   Loader2,
   MessageSquare,
   Sparkles,
@@ -13,7 +15,15 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
-import type { StatsProfileTitle, StatsSummary, StatsTitle, StatsUserProfile, WatchlistComment } from "../types";
+import type {
+  StatsNeedsRatingUser,
+  StatsProfileTitle,
+  StatsSummary,
+  StatsTimeline,
+  StatsTitle,
+  StatsUserProfile,
+  WatchlistComment,
+} from "../types";
 
 function formatStars(stars: number) {
   return stars.toFixed(stars % 1 === 0 ? 0 : 1);
@@ -278,6 +288,52 @@ function Section({ title, icon: Icon, empty, children }: { title: string; icon: 
   );
 }
 
+function NeedsRatingUserGroup({ entry }: { entry: StatsNeedsRatingUser }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg border border-white/5 bg-white/[0.02]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 p-2 text-left"
+      >
+        <span className="flex items-center gap-1.5 text-xs font-medium text-white">
+          {open ? <ChevronDown className="h-3.5 w-3.5 text-slate-500" /> : <ChevronRight className="h-3.5 w-3.5 text-slate-500" />}
+          {entry.username}
+        </span>
+        <span className="chip bg-amber-400/15 text-[10px] text-amber-200">
+          {entry.titles.length + entry.more} to rate
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-1 px-2 pb-2">
+          {entry.titles.map((t) => (
+            <div key={t.item_id} className="flex items-center justify-between gap-2 rounded bg-white/[0.03] px-2 py-1 text-[11px] text-slate-300">
+              <span className="truncate">{t.title}</span>
+              <span className="shrink-0 text-slate-500">{t.watched_at ? formatRelativeDate(t.watched_at) : ""}</span>
+            </div>
+          ))}
+          {entry.more > 0 && <p className="px-2 py-0.5 text-[10px] text-slate-500">+{entry.more} more</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NeedsRatingCard({ entries }: { entries: StatsNeedsRatingUser[] }) {
+  return (
+    <Section title="Needs rating" icon={Star} empty="Everyone is caught up on ratings.">
+      {entries.length > 0 && (
+        <div className="space-y-1.5">
+          {entries.map((entry) => (
+            <NeedsRatingUserGroup key={entry.user_id} entry={entry} />
+          ))}
+        </div>
+      )}
+    </Section>
+  );
+}
+
 function seriesEpNote(item: StatsTitle) {
   return item.kind === "series" && item.group_episode_progress ? ` · ${item.group_episode_progress} eps` : "";
 }
@@ -495,6 +551,84 @@ function UserProfileView({ profile, groupName }: { profile: StatsUserProfile; gr
   );
 }
 
+function TimelineSparkline({ counts }: { counts: { date: string; count: number }[] }) {
+  if (counts.length === 0) return null;
+  const max = Math.max(...counts.map((c) => c.count), 1);
+  return (
+    <div className="flex h-10 items-end gap-[2px]">
+      {counts.map((c) => (
+        <div
+          key={c.date}
+          title={`${c.date}: ${c.count}`}
+          className="min-w-[2px] flex-1 rounded-t bg-brand-500/50"
+          style={{ height: `${Math.max(8, (c.count / max) * 100)}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function TimelineSection() {
+  const [timeline, setTimeline] = useState<StatsTimeline | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    api
+      .getStatsTimeline(90)
+      .then(setTimeline)
+      .catch((e: Error) => setError(e.message));
+  }, []);
+
+  const totalWatches = useMemo(
+    () => timeline?.watch_counts.reduce((sum, c) => sum + c.count, 0) ?? 0,
+    [timeline]
+  );
+  const totalRatings = useMemo(
+    () => timeline?.rating_counts.reduce((sum, c) => sum + c.count, 0) ?? 0,
+    [timeline]
+  );
+
+  if (error) return null;
+  if (!timeline) return null;
+
+  return (
+    <Section title="Last 90 days" icon={Zap} empty="No activity in the last 90 days.">
+      {(totalWatches > 0 || totalRatings > 0) && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
+              <p className="text-[10px] uppercase tracking-wide text-slate-500">Watched</p>
+              <p className="text-sm font-semibold text-white">{totalWatches}</p>
+            </div>
+            <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
+              <p className="text-[10px] uppercase tracking-wide text-slate-500">Rated</p>
+              <p className="text-sm font-semibold text-white">{totalRatings}</p>
+            </div>
+            <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
+              <p className="text-[10px] uppercase tracking-wide text-slate-500">Busiest day</p>
+              <p className="text-sm font-semibold text-white">
+                {timeline.busiest_day ? formatRelativeDate(timeline.busiest_day.date) : "—"}
+              </p>
+            </div>
+            <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
+              <p className="text-[10px] uppercase tracking-wide text-slate-500">Rating lag</p>
+              <p className="text-sm font-semibold text-white">
+                {timeline.rating_lag_days != null ? `${timeline.rating_lag_days}d` : "—"}
+              </p>
+            </div>
+          </div>
+          {timeline.watch_counts.length > 0 && (
+            <div>
+              <p className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">Watch activity</p>
+              <TimelineSparkline counts={timeline.watch_counts} />
+            </div>
+          )}
+        </div>
+      )}
+    </Section>
+  );
+}
+
 function GroupStatsView({
   stats,
   memberFilterActive,
@@ -527,6 +661,8 @@ function GroupStatsView({
         <StatCard label="Perfect 5★" value={stats.perfect_scores.length} sub="unanimous picks" icon={Sparkles} />
         <StatCard label="Members" value={overview.active_users} sub={memberFilterActive ? "in filter" : "active"} icon={Users} />
       </div>
+
+      <TimelineSection />
 
       <div className="grid gap-3 lg:grid-cols-2">
         <div className="space-y-3">
@@ -589,6 +725,7 @@ function GroupStatsView({
 
         <div className="space-y-3">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Activity</p>
+          <NeedsRatingCard entries={stats.needs_rating} />
           <Section title="Recently watched" icon={Star} empty="Nothing marked watched yet.">
             {stats.recently_watched.length > 0 && (
               <div className="space-y-1.5">
@@ -779,7 +916,10 @@ export function Stats() {
   }, []);
 
   useEffect(() => {
-    api.watchlistGroups().then((r) => setGroups(r.groups.map((g) => ({ id: g.id, name: g.name }))));
+    api
+      .watchlistGroups()
+      .then((r) => setGroups(r.groups.map((g) => ({ id: g.id, name: g.name }))))
+      .catch((e: Error) => setError(e.message));
   }, []);
 
   useEffect(() => {
@@ -796,7 +936,14 @@ export function Stats() {
   }
 
   if (error && !stats) {
-    return <div className="card p-8 text-center text-red-300">Failed to load stats: {error}</div>;
+    return (
+      <div className="card p-8 text-center">
+        <p className="text-sm text-red-300">Failed to load stats: {error}</p>
+        <button type="button" onClick={() => loadStats(groupId, selectedUserIds)} className="btn-ghost mt-3 text-sm">
+          Retry
+        </button>
+      </div>
+    );
   }
 
   if (!stats) return null;

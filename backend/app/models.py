@@ -25,6 +25,11 @@ class Job(Base):
     total: Mapped[int] = mapped_column(Integer, default=0)
     output_path: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str] = mapped_column(Text, default="")
+    restart_source: Mapped[str] = mapped_column(Text, default="")
+    download_mode: Mapped[str] = mapped_column(String, default="normal")
+    cache_file_idx = mapped_column(Integer, nullable=True)
+    cache_filename_hint: Mapped[str] = mapped_column(String, default="")
+    cache_size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     link_tmdb_id = mapped_column(Integer, nullable=True)
     link_media_type: Mapped[str] = mapped_column(String, default="")
     link_season = mapped_column(Integer, nullable=True)
@@ -32,6 +37,8 @@ class Job(Base):
     link_watchlist_id = mapped_column(Integer, nullable=True)
     link_stremio_id: Mapped[str] = mapped_column(String, default="")
     link_series_title: Mapped[str] = mapped_column(String, default="")
+    link_status: Mapped[str] = mapped_column(String, default="")
+    link_error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
@@ -50,6 +57,8 @@ class Job(Base):
             "output_path": self.output_path,
             "error": self.error,
             "link_tmdb_id": self.link_tmdb_id,
+            "link_status": self.link_status,
+            "link_error": self.link_error,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -132,6 +141,8 @@ class QueueItem(Base):
     thumbnail: Mapped[str] = mapped_column(String, default="")
     duration: Mapped[float] = mapped_column(Float, default=0.0)
     position: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    queued_by_user_id = mapped_column(Integer, nullable=True)
+    queued_by: Mapped[str] = mapped_column(String, default="")
 
     def to_dict(self) -> dict:
         return {
@@ -141,6 +152,7 @@ class QueueItem(Base):
             "thumbnail": self.thumbnail,
             "duration": self.duration,
             "position": self.position,
+            "queued_by": self.queued_by or "",
         }
 
 
@@ -158,6 +170,7 @@ class User(Base):
     username: Mapped[str] = mapped_column(String, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String)
     role: Mapped[str] = mapped_column(String, default="member")  # admin | member
+    session_version: Mapped[int] = mapped_column(Integer, default=0)
     watchlist_stats_excluded: Mapped[bool] = mapped_column(Boolean, default=False)
     watchlist_stats_excluded_at = mapped_column(DateTime, nullable=True)
     allow_local_download: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -281,4 +294,60 @@ class WheelPreset(Base):
             "name": self.name,
             "labels": [str(x) for x in labels if str(x).strip()],
             "sort_order": self.sort_order,
+        }
+
+
+class MovieNightSession(Base):
+    """Guided Session Mode: pick -> spin -> queue -> play -> rate. One active
+    (state != ended) session at a time; collaborative — any member can drive
+    state transitions. See plan 011 for the state machine."""
+
+    __tablename__ = "movie_night_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id = mapped_column(Integer, ForeignKey("watchlist_groups.id"), nullable=True)
+    watchlist_item_id = mapped_column(Integer, ForeignKey("watchlist_items.id"), nullable=True)
+    library_item_id = mapped_column(Integer, ForeignKey("library_items.id"), nullable=True)
+    state: Mapped[str] = mapped_column(String, default="picking", index=True)
+    started_by_user_id = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    ended_at = mapped_column(DateTime, nullable=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "group_id": self.group_id,
+            "watchlist_item_id": self.watchlist_item_id,
+            "library_item_id": self.library_item_id,
+            "state": self.state,
+            "started_by_user_id": self.started_by_user_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "ended_at": self.ended_at.isoformat() if self.ended_at else None,
+        }
+
+
+class AppEvent(Base):
+    """Activity feed row: one entry per user-visible action (queue add, auto-skip,
+    download started/completed, login, library delete, etc.). username is
+    denormalized so deleted users keep their attribution."""
+
+    __tablename__ = "app_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    user_id = mapped_column(Integer, nullable=True)
+    username: Mapped[str] = mapped_column(String, default="")
+    kind: Mapped[str] = mapped_column(String, index=True)
+    title: Mapped[str] = mapped_column(String, default="")
+    detail: Mapped[str] = mapped_column(String, default="")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "user_id": self.user_id,
+            "username": self.username or "",
+            "kind": self.kind,
+            "title": self.title,
+            "detail": self.detail or "",
         }

@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from obsws_python.error import OBSSDKRequestError
@@ -28,55 +30,100 @@ def _configure_logging() -> None:
 
 _configure_logging()
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect  # noqa: E402 (must follow _configure_logging())
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import FileResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware  # noqa: E402
 
-from . import auth
-from .config import settings
-from .db import init_db
-from .downloads.manager import manager as download_manager
-from .obs.controller import aio, controller
-from .playqueue.manager import manager as queue_manager
-from .routers import (
+from . import auth  # noqa: E402
+from .config import settings  # noqa: E402
+from .db import init_db  # noqa: E402
+from .downloads.manager import manager as download_manager  # noqa: E402
+from .obs.controller import controller  # noqa: E402
+from .playqueue.manager import manager as queue_manager  # noqa: E402
+from .routers import (  # noqa: E402
     auth_routes,
+    backup_routes,
     browse_routes,
     downloads_routes,
+    events_routes,
     health_routes,
     library_routes,
+    mediamtx_routes,
     obs_routes,
     player_routes,
     queue_routes,
     search_routes,
+    session_routes,
     settings_routes,
     stats_routes,
     stream_routes,
-    mediamtx_routes,
     torbox_routes,
-    backup_routes,
     users_routes,
     watchlist_routes,
 )
-from .ws import hub
-
-app = FastAPI(title="VRChat Movie Night")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+from .ws import hub  # noqa: E402
 
 _loop: asyncio.AbstractEventLoop | None = None
+
+logger = logging.getLogger(__name__)
 
 
 def schedule(coro) -> None:
     """Schedule a coroutine from any thread (used by OBS event callbacks)."""
     if _loop is not None:
         asyncio.run_coroutine_threadsafe(coro, _loop)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    global _loop
+    _loop = asyncio.get_running_loop()
+    init_db()
+    hub.bind_loop(_loop)
+    download_manager.start()
+    controller.set_playback_ended_callback(queue_manager.on_playback_ended)
+
+    async def _initial_scan():
+        from .library.scanner import scan_all
+        await asyncio.to_thread(scan_all)
+        await hub.broadcast("library_update", {})
+
+    tasks = [
+        asyncio.create_task(_initial_scan()),
+        asyncio.create_task(_player_poller()),
+    ]
+    try:
+        yield
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        _loop = None
+
+
+app = FastAPI(title="VRChat Movie Night", lifespan=lifespan)
+
+
+def _cors_origins() -> list[str]:
+    origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    extra = (settings.cors_origins or "").strip()
+    if extra:
+        origins.extend(part.strip() for part in extra.split(",") if part.strip())
+    return origins
+
+
+if settings.behind_proxy:
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 for r in (
@@ -97,6 +144,8 @@ for r in (
     users_routes.router,
     watchlist_routes.router,
     health_routes.router,
+    events_routes.router,
+    session_routes.router,
 ):
     app.include_router(r)
 
@@ -139,6 +188,7 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 async def _player_poller() -> None:
+    last_error_log = 0.0
     while True:
         await asyncio.sleep(1.0)
         try:
@@ -146,25 +196,10 @@ async def _player_poller() -> None:
             await queue_manager.poll_playback_stall()
             await queue_manager.broadcast_player()
         except Exception:
-            pass
-
-
-@app.on_event("startup")
-async def on_startup() -> None:
-    global _loop
-    _loop = asyncio.get_running_loop()
-    init_db()
-    hub.bind_loop(_loop)
-    download_manager.start()
-    controller.set_playback_ended_callback(queue_manager.on_playback_ended)
-
-    async def _initial_scan():
-        from .library.scanner import scan_all
-        await asyncio.to_thread(scan_all)
-        await hub.broadcast("library_update", {})
-
-    asyncio.create_task(_initial_scan())
-    asyncio.create_task(_player_poller())
+            now = time.monotonic()
+            if now - last_error_log >= 60.0:
+                last_error_log = now
+                logger.exception("Player poller iteration failed (auto-advance may be degraded)")
 
 
 # ---- Thumbnails ---------------------------------------------------------

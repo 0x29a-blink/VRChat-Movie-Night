@@ -108,7 +108,6 @@ def _cache_path(source: Path, item: LibraryItem) -> Path:
 
 def _needs_remux(item: LibraryItem, tracks: dict) -> bool:
     audio_count = len(tracks.get("audio") or [])
-    sub_count = len(tracks.get("subtitles") or [])
     if audio_count <= 1 and (item.playback_subtitle_index is None or item.playback_subtitle_index < 0):
         return False
     if item.playback_audio_index is not None and item.playback_audio_index > 0:

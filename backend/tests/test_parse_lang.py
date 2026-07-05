@@ -1,4 +1,4 @@
-from app.search.parse import _parse_language_meta, parse_stream
+from app.search.parse import _normalize_raw_stream, _parse_language_meta, parse_stream, parse_streams
 
 
 def test_dub_from_release_name():
@@ -36,6 +36,33 @@ def test_parse_stream_includes_lang_fields():
     assert row is not None
     assert row["audio_lang"] == "dual"
     assert "Dual" in row["lang_tags"]
+
+
+def test_aiostreams_torrent_infohash_in_stream_data():
+    """AIOStreams often nests infoHash under streamData.torrent without top-level fields."""
+    raw = {
+        "name": "Addon 1080p",
+        "description": "Torrentio\n⚡ cached",
+        "streamData": {
+            "type": "torrent",
+            "parsedFile": {
+                "resolution": "1080p",
+                "encode": "HEVC",
+            },
+            "torrent": {"infoHash": "a" * 40, "seeders": 42, "fileIdx": 0},
+            "service": {"id": "torbox", "cached": True},
+        },
+        "behaviorHints": {},
+    }
+    rows = parse_streams([raw])
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["info_hash"] == "a" * 40
+    assert row["seeders"] == 42
+    assert row["cached"] is True
+    norm = _normalize_raw_stream(raw)
+    assert norm is not None
+    assert norm.get("infoHash") == "a" * 40
 
 
 def test_aiostreams_parsed_file_languages():

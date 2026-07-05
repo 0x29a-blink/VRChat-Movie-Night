@@ -14,6 +14,8 @@ export interface Job {
   created_at: string;
   updated_at: string;
   link_tmdb_id?: number | null;
+  link_status?: "pending" | "linked" | "failed" | "";
+  link_error?: string;
 }
 
 export interface LibraryItem {
@@ -51,6 +53,18 @@ export interface QueueItem {
   thumbnail: string;
   duration: number;
   position: number;
+  queued_by?: string;
+  prepare_status?: string;
+}
+
+export interface AppEvent {
+  id: number;
+  created_at: string;
+  user_id: number | null;
+  username: string;
+  kind: string;
+  title: string;
+  detail: string;
 }
 
 export interface QueueSnapshot {
@@ -207,6 +221,14 @@ export interface Settings {
   hls_public_host: string;
   hls_stream_path: string;
   preserve_torrent_tracks?: boolean;
+  obs_password_set?: boolean;
+  tmdb_api_key_set?: boolean;
+  torbox_api_key_set?: boolean;
+}
+
+export interface ProviderCheckResult {
+  ok: boolean;
+  detail?: string;
 }
 
 export interface PreflightStatus {
@@ -219,8 +241,12 @@ export interface PreflightStatus {
   hls_error?: string;
   hls_url: string;
   hls_path?: string;
+  aiostreams_ok?: boolean;
+  aiostreams_base?: string;
+  aiostreams_detail?: string;
   users: number;
   tools?: { name: string; ok: boolean; detail?: string }[];
+  providers?: { name: string; ok: boolean; detail?: string }[];
   issues?: string[];
   checklist_ok?: boolean;
   ready: boolean;
@@ -236,6 +262,24 @@ export interface BackupImportResult {
   wheel_presets: number;
   settings_merged: number;
   users_mapped: number;
+  pre_import_snapshot?: string;
+}
+
+export interface BackupImportPreview {
+  ok: boolean;
+  exported_at: string | null;
+  users_matched: number;
+  users_unmatched: string[];
+  groups: number;
+  items: number;
+  ratings: number;
+  watch_status: number;
+  comments: number;
+  watchlist_item_user_exclusions: number;
+  wheel_presets: number;
+  library_items_total: number;
+  library_links_resolvable: number;
+  settings_keys: number;
 }
 
 export interface UserInfo {
@@ -244,6 +288,15 @@ export interface UserInfo {
   role: "admin" | "member";
   watchlist_stats_excluded?: boolean;
   allow_local_download?: boolean;
+  capabilities?: {
+    can_manage_settings: boolean;
+    can_manage_users: boolean;
+    can_manage_streaming: boolean;
+    can_control_player: boolean;
+    can_download_to_server: boolean;
+    can_open_torbox_local_download: boolean;
+    can_manage_watchlist: boolean;
+  };
   created_at?: string;
 }
 
@@ -324,6 +377,22 @@ export interface WatchlistItem {
   library_match?: LibraryItem | null;
 }
 
+export interface MovieNightSession {
+  id: number;
+  group_id: number | null;
+  watchlist_item_id: number | null;
+  library_item_id: number | null;
+  state: "picking" | "queued" | "playing" | "rating" | "ended";
+  started_by_user_id: number | null;
+  created_at: string | null;
+  ended_at: string | null;
+  watchlist_item_title?: string;
+  watchlist_item_poster?: string;
+  library_item_title?: string;
+  library_path?: string;
+  needs_download?: boolean;
+}
+
 export interface WatchlistComment {
   id: number;
   body: string;
@@ -392,6 +461,32 @@ export interface StatsUserRow {
   avg_rating_given: number | null;
 }
 
+export interface StatsNeedsRatingTitle {
+  item_id: number;
+  title: string;
+  watched_at: string | null;
+}
+
+export interface StatsNeedsRatingUser {
+  user_id: number;
+  username: string;
+  titles: StatsNeedsRatingTitle[];
+  more: number;
+}
+
+export interface StatsTimelineDayCount {
+  date: string;
+  count: number;
+}
+
+export interface StatsTimeline {
+  days: number;
+  watch_counts: StatsTimelineDayCount[];
+  rating_counts: StatsTimelineDayCount[];
+  busiest_day: StatsTimelineDayCount | null;
+  rating_lag_days: number | null;
+}
+
 export interface StatsSummary {
   group_id: number | null;
   group_name: string;
@@ -413,5 +508,6 @@ export interface StatsSummary {
   recently_watched: StatsTitle[];
   most_commented: StatsTitle[];
   user_leaderboard: StatsUserRow[];
+  needs_rating: StatsNeedsRatingUser[];
   profile: StatsUserProfile | null;
 }

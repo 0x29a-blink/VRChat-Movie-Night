@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import shutil
-import time
 from typing import Any
 
 from .obs.stream_presets import recommend_from_upload_kbps

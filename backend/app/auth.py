@@ -43,7 +43,13 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def make_token(user: User) -> str:
-    return _serializer.dumps({"user_id": user.id, "role": user.role})
+    return _serializer.dumps(
+        {
+            "user_id": user.id,
+            "role": user.role,
+            "session_version": int(user.session_version or 0),
+        }
+    )
 
 
 def _parse_token(token: str) -> dict | None:
@@ -59,7 +65,13 @@ def get_user_from_token(token: str | None, db: Session) -> User | None:
     data = _parse_token(token)
     if not data or "user_id" not in data:
         return None
-    return db.get(User, data["user_id"])
+    user = db.get(User, data["user_id"])
+    if not user:
+        return None
+    token_version = int(data.get("session_version") or 0)
+    if token_version != int(user.session_version or 0):
+        return None
+    return user
 
 
 def check_locked(ip: str) -> None:
@@ -129,8 +141,21 @@ def is_authenticated(request: Request) -> CurrentUser | None:
         db.close()
 
 
+def session_cookie_kwargs(request: Request | None = None) -> dict[str, str | bool]:
+    """Cookie flags for HTTPS frontends (Cloudflare Tunnel, reverse proxy)."""
+    from .config import settings
+
+    secure = bool(settings.behind_proxy)
+    if request is not None and (request.headers.get("x-forwarded-proto") or "").lower() == "https":
+        secure = True
+    return {"httponly": True, "samesite": "lax", "secure": secure}
+
+
 def ws_authenticated(token: str | None) -> bool:
     if not token:
         return False
-    data = _parse_token(token)
-    return bool(data and "user_id" in data)
+    db = SessionLocal()
+    try:
+        return get_user_from_token(token, db) is not None
+    finally:
+        db.close()

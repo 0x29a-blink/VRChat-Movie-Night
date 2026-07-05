@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from .. import auth
 from ..db import SessionLocal, get_db
+from ..events import record_event
 from ..library.linking import apply_tmdb_link, sync_queue_from_library, sync_watchlist_from_library
 from ..library.matching import find_library_by_stremio, find_library_by_tmdb, library_item_on_watchlist
 from ..library.playback import build_playback_file, probe_media_tracks
@@ -44,6 +45,8 @@ class PlaybackBody(BaseModel):
 
 router = APIRouter(prefix="/api/library", tags=["library"],
                    dependencies=[Depends(auth.require_auth)])
+_scan_lock = asyncio.Lock()
+_scan_running = False
 
 
 @router.get("")
@@ -140,14 +143,32 @@ def library_match(
 
 
 async def _rescan():
-    await asyncio.to_thread(scan_all)
-    await hub.broadcast("library_update", {})
+    global _scan_running
+    await hub.broadcast("library_scan_started", {})
+    try:
+        await asyncio.to_thread(scan_all)
+        await hub.broadcast("library_update", {})
+        await hub.broadcast("library_scan_finished", {"ok": True})
+    except Exception as exc:  # noqa: BLE001
+        await hub.broadcast("library_scan_finished", {"ok": False, "error": str(exc)})
+    finally:
+        _scan_running = False
 
 
 @router.post("/scan")
 async def scan(background: BackgroundTasks):
+    global _scan_running
+    async with _scan_lock:
+        if _scan_running:
+            raise HTTPException(409, "Library scan is already running")
+        _scan_running = True
     background.add_task(_rescan)
-    return {"ok": True}
+    return {"ok": True, "scanning": True}
+
+
+@router.get("/scan/status")
+async def scan_status():
+    return {"scanning": _scan_running}
 
 
 @router.patch("/{item_id}")
@@ -243,11 +264,12 @@ async def unlink_item(item_id: int):
 
 
 @router.delete("/{item_id}")
-async def delete_item(item_id: int):
+async def delete_item(item_id: int, user: auth.CurrentUser = Depends(auth.require_auth)):
     with SessionLocal() as s:
         item = s.get(LibraryItem, item_id)
         if not item:
             raise HTTPException(404, "Not found")
+        deleted_title = item.display_title()
         s.query(WatchlistItem).filter(WatchlistItem.library_item_id == item_id).update(
             {WatchlistItem.library_item_id: None},
             synchronize_session=False,
@@ -259,5 +281,6 @@ async def delete_item(item_id: int):
             raise HTTPException(500, f"Could not delete file: {exc}") from exc
         s.delete(item)
         s.commit()
+    record_event("library_delete", deleted_title, user=user)
     await hub.broadcast("library_update", {"reason": "deleted"})
     return {"ok": True}

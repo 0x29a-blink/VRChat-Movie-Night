@@ -5,6 +5,7 @@ import httpx
 from fastapi import Request
 
 from . import settings_store
+from .config import settings as env_settings
 
 DEFAULT_HLS_REL_PATH = "live/vrstream/index.m3u8"
 HLS_PORT = 8888
@@ -56,9 +57,17 @@ def configured_hls_rel_path() -> str:
     return custom or DEFAULT_HLS_REL_PATH
 
 
+def _hls_public_base_url() -> str:
+    base = (env_settings.hls_public_base_url or "").strip().rstrip("/")
+    return base
+
+
 def build_hls_url(request: Request | None = None, rel_path: str | None = None) -> str:
-    host = resolve_hls_host(request)
     path = (rel_path or configured_hls_rel_path() or DEFAULT_HLS_REL_PATH).lstrip("/")
+    tunnel_base = _hls_public_base_url()
+    if tunnel_base:
+        return f"{tunnel_base}/{path}"
+    host = resolve_hls_host(request)
     return f"http://{host}:{HLS_PORT}/{path}"
 
 

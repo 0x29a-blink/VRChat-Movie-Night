@@ -38,6 +38,7 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
   const { push: pushToast } = useToast();
   const [data, setData] = useState<Record<string, LibraryItem[]>>({});
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [scanning, setScanning] = useState(false);
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -50,10 +51,30 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
   const [tracksItemId, setTracksItemId] = useState<number | null>(null);
 
   const load = () => {
+    setError("");
     api
       .library()
       .then(setData)
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not load library"))
       .finally(() => setLoading(false));
+  };
+
+  const waitForScan = () => {
+    window.setTimeout(async () => {
+      try {
+        const status = await api.libraryScanStatus();
+        if (status.scanning) {
+          waitForScan();
+          return;
+        }
+        setScanning(false);
+        load();
+        pushToast("Library scan complete", "success");
+      } catch (err: unknown) {
+        setScanning(false);
+        setError(err instanceof Error ? err.message : "Could not check scan status");
+      }
+    }, 1000);
   };
 
   useEffect(load, [version]);
@@ -62,11 +83,10 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
     setScanning(true);
     try {
       await api.scanLibrary();
-      setTimeout(() => {
-        load();
-        setScanning(false);
-      }, 1500);
-    } catch {
+      pushToast("Library scan started", "info");
+      waitForScan();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not scan library");
       setScanning(false);
     }
   };
@@ -159,6 +179,13 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
       {loading ? (
         <div className="flex items-center gap-2 py-12 text-slate-400">
           <Loader2 className="h-5 w-5 animate-spin" /> Loading…
+        </div>
+      ) : error ? (
+        <div className="card p-8 text-center">
+          <p className="text-sm text-red-300">{error}</p>
+          <button type="button" onClick={load} className="btn-ghost mt-3 text-sm">
+            Try again
+          </button>
         </div>
       ) : total === 0 ? (
         <div className="card p-12 text-center text-slate-500">

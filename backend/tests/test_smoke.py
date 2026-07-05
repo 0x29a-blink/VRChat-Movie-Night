@@ -1,8 +1,7 @@
 import json
 
-from app.auth import hash_password
 from app.library.matching import find_library_by_tmdb, find_library_for_watchlist_item
-from app.models import LibraryItem, User, WatchlistGroup, WatchlistItem
+from app.models import LibraryItem, WatchlistGroup, WatchlistItem
 
 
 def test_library_delete_clears_watchlist_link(db, tmp_path):

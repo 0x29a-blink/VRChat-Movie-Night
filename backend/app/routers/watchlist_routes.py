@@ -11,9 +11,7 @@ from sqlalchemy.orm import Session
 from .. import auth
 from ..db import get_db
 from ..library.matching import find_library_for_watchlist_item
-from ..search import anime_meta, tmdb
 from ..models import (
-    LibraryItem,
     User,
     UserRating,
     UserWatchStatus,
@@ -23,6 +21,7 @@ from ..models import (
     WatchlistItemUserExclusion,
     WheelPreset,
 )
+from ..search import anime_meta, tmdb
 from ..watchlist.exclusions import (
     ExclusionContext,
     filter_ratings_for_item,
@@ -199,17 +198,20 @@ def _user_root_watched(
     item: WatchlistItem,
     children: list[WatchlistItem] | None = None,
     nested_by_parent: dict[int, list[WatchlistItem]] | None = None,
+    watched_lookup: set[tuple[int, int]] | None = None,
 ) -> bool:
     """Whether this user has finished the title (movie, series, collection, or all tracked episodes)."""
     if item.kind == "series":
-        if _user_watched_item(db, user_id, item.id):
+        if _user_watched_item(db, user_id, item.id, watched_lookup=watched_lookup):
             return True
         eps = children if children is not None else _direct_children(db, item.id)
         if eps:
-            return all(_user_watched_item(db, user_id, c.id) for c in eps)
+            return all(
+                _user_watched_item(db, user_id, c.id, watched_lookup=watched_lookup) for c in eps
+            )
         return False
     if item.kind == "collection":
-        if _user_watched_item(db, user_id, item.id):
+        if _user_watched_item(db, user_id, item.id, watched_lookup=watched_lookup):
             return True
         kids = children if children is not None else _direct_children(db, item.id)
         if not kids:
@@ -220,12 +222,14 @@ def _user_root_watched(
         for child in kids:
             if child.kind == "series":
                 eps = nested_by_parent.get(child.id, [])
-                if not _user_root_watched(db, user_id, child, eps):
+                if not _user_root_watched(
+                    db, user_id, child, eps, watched_lookup=watched_lookup
+                ):
                     return False
-            elif not _user_watched_item(db, user_id, child.id):
+            elif not _user_watched_item(db, user_id, child.id, watched_lookup=watched_lookup):
                 return False
         return True
-    return _user_watched_item(db, user_id, item.id)
+    return _user_watched_item(db, user_id, item.id, watched_lookup=watched_lookup)
 
 
 def _children_by_parent(db: Session, series_ids: list[int]) -> dict[int, list[WatchlistItem]]:
@@ -350,7 +354,14 @@ def _enrich_container_children(
     return out
 
 
-def _user_watched_item(db: Session, user_id: int, item_id: int) -> bool:
+def _user_watched_item(
+    db: Session,
+    user_id: int,
+    item_id: int,
+    watched_lookup: set[tuple[int, int]] | None = None,
+) -> bool:
+    if watched_lookup is not None:
+        return (user_id, item_id) in watched_lookup
     row = (
         db.query(UserWatchStatus)
         .filter(UserWatchStatus.user_id == user_id, UserWatchStatus.item_id == item_id)

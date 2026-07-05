@@ -34,6 +34,9 @@ _EDITABLE_DEFAULTS: dict[str, Any] = {
     "preserve_torrent_tracks": True,
 }
 
+# Values never returned by the API; empty submitted value means "keep current".
+SECRET_KEYS = ("obs_password", "tmdb_api_key", "torbox_api_key")
+
 
 def _default(key: str) -> Any:
     return getattr(env_settings, key, None)
@@ -137,6 +140,8 @@ def update(values: dict[str, Any]) -> None:
     for key, raw in values.items():
         if key not in EDITABLE:
             continue
+        if key in SECRET_KEYS and (raw is None or str(raw).strip() == ""):
+            continue  # blank secret = leave unchanged (secrets are write-only via API)
         caster = EDITABLE[key]
         try:
             if caster is bool and isinstance(raw, str):
@@ -149,7 +154,10 @@ def update(values: dict[str, Any]) -> None:
 
 
 def public() -> dict[str, Any]:
-    """Return current editable settings for the Settings page."""
+    """Editable settings for the Settings page — secret values are redacted."""
     out = {key: get(key) for key in EDITABLE if key not in ("aiostreams_base", "aiostreams_auto")}
+    for key in SECRET_KEYS:
+        out[f"{key}_set"] = bool(out.get(key))
+        out[key] = ""
     out.update(aiostreams_public_fields())
     return out

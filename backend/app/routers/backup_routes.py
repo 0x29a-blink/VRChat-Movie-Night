@@ -3,10 +3,11 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.orm import Session
 
 from .. import auth, settings_store
+from ..config import settings as env_settings
 from ..db import get_db
 from ..models import (
     LibraryItem,
@@ -26,11 +27,10 @@ router = APIRouter(prefix="/api/backup", tags=["backup"], dependencies=[Depends(
 SECRET_SETTING_KEYS = {"torbox_api_key", "tmdb_api_key", "obs_password"}
 
 
-@router.get("/export")
-def export_backup(
-    db: Session = Depends(get_db),
-    _: auth.CurrentUser = Depends(auth.require_admin),
-):
+def _build_export_payload(db: Session) -> dict:
+    """Build the full backup payload (version 1) from the current DB state.
+    Shared by /export and the pre-import snapshot writer — keep in sync with
+    BackupPayload and its nested schema models below."""
     users = [
         {
             "id": u.id,
@@ -143,7 +143,7 @@ def export_backup(
         else:
             settings[row.key] = row.value
 
-    payload = {
+    return {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "version": 1,
         "users": users,
@@ -158,6 +158,13 @@ def export_backup(
         "settings": settings,
     }
 
+
+@router.get("/export")
+def export_backup(
+    db: Session = Depends(get_db),
+    _: auth.CurrentUser = Depends(auth.require_admin),
+):
+    payload = _build_export_payload(db)
     body = json.dumps(payload, indent=2, ensure_ascii=False)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     return Response(
@@ -165,6 +172,110 @@ def export_backup(
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="movie-night-backup-{stamp}.json"'},
     )
+
+
+class _Lenient(BaseModel):
+    """Base for backup schema models: ignore unknown fields (forward-compat)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class BackupUser(_Lenient):
+    id: int
+    username: str
+    role: str = "member"
+    watchlist_stats_excluded: bool = False
+    watchlist_stats_excluded_at: str | None = None
+    created_at: str | None = None
+
+
+class BackupGroup(_Lenient):
+    id: int
+    name: str = "Group"
+    sort_order: int = 0
+    wheel_enabled: bool = True
+
+
+class BackupItem(_Lenient):
+    id: int
+    group_id: int | None = None
+    parent_id: int | None = None
+    kind: str = "movie"
+    tmdb_id: int | None = None
+    media_type: str = "movie"
+    season: int | None = None
+    episode: int | None = None
+    title: str = ""
+    poster: str = ""
+    year: str = ""
+    overview: str = ""
+    air_date: str = ""
+    library_item_id: int | None = None
+    list_section: str = "to_watch"
+    sort_order: int = 0
+    created_at: str | None = None
+
+
+class BackupWatchStatus(_Lenient):
+    user_id: int | None = None
+    item_id: int | None = None
+    watched: bool = False
+    watched_at: str | None = None
+
+
+class BackupRating(_Lenient):
+    user_id: int | None = None
+    item_id: int | None = None
+    stars: float = 0
+
+
+class BackupComment(_Lenient):
+    id: int | None = None
+    user_id: int | None = None
+    item_id: int | None = None
+    body: str = ""
+    created_at: str | None = None
+
+
+class BackupExclusion(_Lenient):
+    item_id: int | None = None
+    user_id: int | None = None
+
+
+class BackupLibraryItem(_Lenient):
+    id: int
+    path: str
+    filename: str = ""
+    title: str = ""
+    folder: str = ""
+    tmdb_id: int | None = None
+    media_type: str = ""
+    season: int | None = None
+    episode: int | None = None
+    tmdb_title: str = ""
+    tmdb_year: str = ""
+
+
+class BackupWheelPreset(_Lenient):
+    id: int | None = None
+    name: str = "Preset"
+    labels: list[str] = []
+    sort_order: int = 0
+
+
+class BackupPayload(_Lenient):
+    exported_at: str | None = None
+    version: int
+    users: list[BackupUser] = []
+    watchlist_groups: list[BackupGroup] = []
+    watchlist_items: list[BackupItem] = []
+    user_watch_status: list[BackupWatchStatus] = []
+    user_ratings: list[BackupRating] = []
+    watchlist_comments: list[BackupComment] = []
+    watchlist_item_user_exclusions: list[BackupExclusion] = []
+    library_items: list[BackupLibraryItem] = []
+    wheel_presets: list[BackupWheelPreset] = []
+    settings: dict = {}
 
 
 class ImportBody(BaseModel):
@@ -180,37 +291,109 @@ def _parse_dt(value: str | None):
         return None
 
 
+def _validate_payload(data: dict) -> BackupPayload:
+    try:
+        return BackupPayload.model_validate(data)
+    except ValidationError as exc:
+        raise HTTPException(422, {"message": "Invalid backup payload", "errors": exc.errors()}) from exc
+
+
+def _match_users(payload: BackupPayload, db: Session) -> tuple[dict[int, int], list[str]]:
+    """Map backup user ids -> current DB user ids by username; report unmatched usernames."""
+    backup_users = {u.username: u for u in payload.users if u.username}
+    user_id_map: dict[int, int] = {}
+    matched_usernames: set[str] = set()
+    for u in db.query(User).all():
+        old = backup_users.get(u.username)
+        if old:
+            user_id_map[old.id] = u.id
+            matched_usernames.add(u.username)
+    unmatched = sorted(set(backup_users.keys()) - matched_usernames)
+    return user_id_map, unmatched
+
+
+def _match_library(payload: BackupPayload, db: Session) -> dict[int, int]:
+    """Map backup library_item ids -> current DB library_item ids by path (only resolvable ones)."""
+    lib_id_map: dict[int, int] = {}
+    for lib in payload.library_items:
+        if not lib.path:
+            continue
+        existing = db.query(LibraryItem).filter(LibraryItem.path == lib.path).first()
+        if existing:
+            lib_id_map[lib.id] = existing.id
+    return lib_id_map
+
+
+@router.post("/import-preview")
+def import_preview(
+    body: ImportBody,
+    db: Session = Depends(get_db),
+    _: auth.CurrentUser = Depends(auth.require_admin),
+):
+    payload = _validate_payload(body.data)
+    if payload.version != 1:
+        raise HTTPException(400, "Unsupported backup version (expected version 1)")
+
+    user_id_map, unmatched_users = _match_users(payload, db)
+    lib_id_map = _match_library(payload, db)
+
+    return {
+        "ok": True,
+        "exported_at": payload.exported_at,
+        "users_matched": len(user_id_map),
+        "users_unmatched": unmatched_users,
+        "groups": len(payload.watchlist_groups),
+        "items": len(payload.watchlist_items),
+        "ratings": len(payload.user_ratings),
+        "watch_status": len(payload.user_watch_status),
+        "comments": len(payload.watchlist_comments),
+        "watchlist_item_user_exclusions": len(payload.watchlist_item_user_exclusions),
+        "wheel_presets": len(payload.wheel_presets),
+        "library_items_total": len(payload.library_items),
+        "library_links_resolvable": len(lib_id_map),
+        "settings_keys": len(payload.settings),
+    }
+
+
+def _write_pre_import_snapshot(db: Session) -> str:
+    """Serialize the CURRENT DB state (same shape as /export) to a timestamped
+    file under the backups dir, before any import mutation. Returns filename."""
+    snapshot = _build_export_payload(db)
+    backups_dir = env_settings.data_path / "backups"
+    backups_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    filename = f"pre-import-{stamp}.json"
+    (backups_dir / filename).write_text(
+        json.dumps(snapshot, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return filename
+
+
 @router.post("/import")
 def import_backup(
     body: ImportBody,
     db: Session = Depends(get_db),
     _: auth.CurrentUser = Depends(auth.require_admin),
 ):
-    payload = body.data
-    if payload.get("version") != 1:
+    payload = _validate_payload(body.data)
+    if payload.version != 1:
         raise HTTPException(400, "Unsupported backup version (expected version 1)")
 
-    backup_users = {u["username"]: u for u in payload.get("users", []) if u.get("username")}
-    user_id_map: dict[int, int] = {}
+    # Snapshot BEFORE any mutation: the user loop below mutates User rows in
+    # this same session, and the snapshot serializes live session objects.
+    snapshot_file = _write_pre_import_snapshot(db)
+
+    user_id_map, _unmatched_users = _match_users(payload, db)
     for u in db.query(User).all():
-        old = backup_users.get(u.username)
+        old = next((bu for bu in payload.users if bu.username == u.username), None)
         if old:
-            user_id_map[old["id"]] = u.id
-            if "watchlist_stats_excluded" in old:
-                u.watchlist_stats_excluded = bool(old["watchlist_stats_excluded"])
-            if old.get("watchlist_stats_excluded_at"):
-                u.watchlist_stats_excluded_at = _parse_dt(old["watchlist_stats_excluded_at"])
-            elif not old.get("watchlist_stats_excluded"):
+            u.watchlist_stats_excluded = bool(old.watchlist_stats_excluded)
+            if old.watchlist_stats_excluded_at:
+                u.watchlist_stats_excluded_at = _parse_dt(old.watchlist_stats_excluded_at)
+            elif not old.watchlist_stats_excluded:
                 u.watchlist_stats_excluded_at = None
 
-    lib_id_map: dict[int, int] = {}
-    for lib in payload.get("library_items", []):
-        path = lib.get("path")
-        if not path:
-            continue
-        existing = db.query(LibraryItem).filter(LibraryItem.path == path).first()
-        if existing:
-            lib_id_map[lib["id"]] = existing.id
+    lib_id_map = _match_library(payload, db)
 
     db.query(WatchlistComment).delete(synchronize_session=False)
     db.query(UserRating).delete(synchronize_session=False)
@@ -221,109 +404,110 @@ def import_backup(
     db.query(WatchlistGroup).delete(synchronize_session=False)
     db.query(WheelPreset).delete(synchronize_session=False)
     db.flush()
+    db.expunge_all()
 
     group_id_map: dict[int, int] = {}
-    for g in payload.get("watchlist_groups", []):
+    for g in payload.watchlist_groups:
         row = WatchlistGroup(
-            name=g.get("name") or "Group",
-            sort_order=int(g.get("sort_order") or 0),
-            wheel_enabled=bool(g.get("wheel_enabled", True)),
+            name=g.name or "Group",
+            sort_order=int(g.sort_order or 0),
+            wheel_enabled=bool(g.wheel_enabled),
         )
         db.add(row)
         db.flush()
-        group_id_map[g["id"]] = row.id
+        group_id_map[g.id] = row.id
 
-    items = payload.get("watchlist_items", [])
+    items = payload.watchlist_items
     item_id_map: dict[int, int] = {}
 
-    def _create_item(src: dict) -> WatchlistItem:
-        old_gid = src.get("group_id")
-        old_pid = src.get("parent_id")
-        old_lid = src.get("library_item_id")
+    def _create_item(src: BackupItem) -> WatchlistItem:
+        old_gid = src.group_id
+        old_pid = src.parent_id
+        old_lid = src.library_item_id
         row = WatchlistItem(
             group_id=group_id_map.get(old_gid) if old_gid else None,
             parent_id=item_id_map.get(old_pid) if old_pid else None,
-            kind=src.get("kind") or "movie",
-            tmdb_id=src.get("tmdb_id"),
-            media_type=src.get("media_type") or "movie",
-            season=src.get("season"),
-            episode=src.get("episode"),
-            title=src.get("title") or "",
-            poster=src.get("poster") or "",
-            year=src.get("year") or "",
-            overview=src.get("overview") or "",
-            air_date=src.get("air_date") or "",
+            kind=src.kind or "movie",
+            tmdb_id=src.tmdb_id,
+            media_type=src.media_type or "movie",
+            season=src.season,
+            episode=src.episode,
+            title=src.title or "",
+            poster=src.poster or "",
+            year=src.year or "",
+            overview=src.overview or "",
+            air_date=src.air_date or "",
             library_item_id=lib_id_map.get(old_lid) if old_lid else None,
-            list_section=src.get("list_section") or "to_watch",
-            sort_order=int(src.get("sort_order") or 0),
+            list_section=src.list_section or "to_watch",
+            sort_order=int(src.sort_order or 0),
         )
-        created = _parse_dt(src.get("created_at"))
+        created = _parse_dt(src.created_at)
         if created:
             row.created_at = created
         db.add(row)
         db.flush()
-        item_id_map[src["id"]] = row.id
+        item_id_map[src.id] = row.id
         return row
 
     for src in items:
-        if src.get("parent_id") is not None:
+        if src.parent_id is not None:
             continue
         _create_item(src)
 
     for src in items:
-        if src.get("parent_id") is None:
+        if src.parent_id is None:
             continue
-        if src.get("parent_id") not in item_id_map:
+        if src.parent_id not in item_id_map:
             continue
         _create_item(src)
 
     ratings_added = 0
-    for r in payload.get("user_ratings", []):
-        uid = user_id_map.get(r.get("user_id"))
-        iid = item_id_map.get(r.get("item_id"))
+    for r in payload.user_ratings:
+        uid = user_id_map.get(r.user_id)
+        iid = item_id_map.get(r.item_id)
         if uid and iid:
-            db.add(UserRating(user_id=uid, item_id=iid, stars=float(r.get("stars") or 0)))
+            db.add(UserRating(user_id=uid, item_id=iid, stars=float(r.stars or 0)))
             ratings_added += 1
 
     watch_added = 0
-    for w in payload.get("user_watch_status", []):
-        uid = user_id_map.get(w.get("user_id"))
-        iid = item_id_map.get(w.get("item_id"))
+    for w in payload.user_watch_status:
+        uid = user_id_map.get(w.user_id)
+        iid = item_id_map.get(w.item_id)
         if uid and iid:
             db.add(
                 UserWatchStatus(
                     user_id=uid,
                     item_id=iid,
-                    watched=bool(w.get("watched")),
-                    watched_at=_parse_dt(w.get("watched_at")),
+                    watched=bool(w.watched),
+                    watched_at=_parse_dt(w.watched_at),
                 )
             )
             watch_added += 1
 
     comments_added = 0
-    for c in payload.get("watchlist_comments", []):
-        uid = user_id_map.get(c.get("user_id"))
-        iid = item_id_map.get(c.get("item_id"))
-        body_text = (c.get("body") or "").strip()
+    for c in payload.watchlist_comments:
+        uid = user_id_map.get(c.user_id)
+        iid = item_id_map.get(c.item_id)
+        body_text = (c.body or "").strip()
         if uid and iid and body_text:
             row = WatchlistComment(user_id=uid, item_id=iid, body=body_text)
-            created = _parse_dt(c.get("created_at"))
+            created = _parse_dt(c.created_at)
             if created:
                 row.created_at = created
             db.add(row)
             comments_added += 1
 
     exclusions_added = 0
-    for ex in payload.get("watchlist_item_user_exclusions", []):
-        uid = user_id_map.get(ex.get("user_id"))
-        iid = item_id_map.get(ex.get("item_id"))
+    for ex in payload.watchlist_item_user_exclusions:
+        uid = user_id_map.get(ex.user_id)
+        iid = item_id_map.get(ex.item_id)
         if uid and iid:
             db.add(WatchlistItemUserExclusion(item_id=iid, user_id=uid))
             exclusions_added += 1
 
     presets_added = 0
-    for p in payload.get("wheel_presets", []):
-        labels = p.get("labels") or []
+    for p in payload.wheel_presets:
+        labels = p.labels or []
         if not isinstance(labels, list):
             labels = []
         labels = [str(x).strip() for x in labels if str(x).strip()]
@@ -331,15 +515,15 @@ def import_backup(
             continue
         db.add(
             WheelPreset(
-                name=(p.get("name") or "Preset").strip(),
+                name=(p.name or "Preset").strip(),
                 labels_json=json.dumps(labels),
-                sort_order=int(p.get("sort_order") or 0),
+                sort_order=int(p.sort_order or 0),
             )
         )
         presets_added += 1
 
     settings_merged = 0
-    for key, value in (payload.get("settings") or {}).items():
+    for key, value in (payload.settings or {}).items():
         if value == "[redacted]" or value is None or key not in settings_store.EDITABLE:
             continue
         try:
@@ -362,4 +546,5 @@ def import_backup(
         "wheel_presets": presets_added,
         "settings_merged": settings_merged,
         "users_mapped": len(user_id_map),
+        "pre_import_snapshot": snapshot_file,
     }

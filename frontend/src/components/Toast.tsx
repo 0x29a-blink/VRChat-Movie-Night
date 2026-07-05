@@ -4,12 +4,12 @@ import { createPortal } from "react-dom";
 
 export type ToastKind = "success" | "error" | "info";
 
-export type ToastAction = {
+type ToastAction = {
   label: string;
   onClick: () => void;
 };
 
-export type ToastItem = {
+type ToastItem = {
   id: number;
   message: string;
   kind: ToastKind;

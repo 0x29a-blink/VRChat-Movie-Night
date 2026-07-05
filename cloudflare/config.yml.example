@@ -1,0 +1,31 @@
+# Personal Cloudflare Tunnel for Movie Night (optional — local LAN still works without this).
+#
+# RECOMMENDED: use a dashboard token instead of this file.
+#   Copy .env.example → .env, paste CF_TUNNEL_TOKEN, configure hostnames in Cloudflare UI.
+#
+# Alternative named-tunnel setup (advanced):
+#   1. npx cloudflared tunnel login
+#   2. npx cloudflared tunnel create movienight
+#   3. Copy this file to config.yml, set tunnel UUID + hostnames
+#   4. npx cloudflared tunnel route dns movienight movienight.yourdomain.com
+#      npx cloudflared tunnel route dns movienight stream.yourdomain.com
+#
+# backend/.env (when using tunnel):
+#   BEHIND_PROXY=true
+#   HLS_PUBLIC_BASE_URL=https://stream.yourdomain.com
+#   SECRET_KEY=<long random string>
+#
+# Daily use: start-stack.cmd  +  cloudflare\start-tunnel.cmd
+# (start-tunnel.cmd uses npm cloudflared — no separate binary install)
+
+tunnel: YOUR_TUNNEL_UUID
+credentials-file: credentials.json
+
+ingress:
+  # Web UI + API + WebSocket (build frontend first: build-frontend.cmd)
+  - hostname: movienight.yourdomain.com
+    service: http://127.0.0.1:8000
+  # VRChat HLS (MediaMTX — requires start-stack.cmd)
+  - hostname: stream.yourdomain.com
+    service: http://127.0.0.1:8888
+  - service: http_status:404

@@ -149,12 +149,17 @@ export function WheelSpinModal({
   groupName,
   onClose,
   onFindStreams,
+  onWinner,
 }: {
   open: boolean;
   groupId: number;
   groupName: string;
   onClose: () => void;
   onFindStreams?: (target: StreamTarget) => void;
+  /** Session Mode: called with the winning watchlist item's id when the host
+   * accepts the spin result (non-custom wheels only — custom label spins have
+   * no watchlist item to pick). */
+  onWinner?: (itemId: number) => void;
 }) {
   const [mode, setMode] = useState<WheelMode>("group");
   const [phase, setPhase] = useState<Phase>("setup");
@@ -700,8 +705,24 @@ export function WheelSpinModal({
                     />
                   </div>
                 )}
-                <button type="button" onClick={onClose} className="btn-primary mt-5 w-full">
-                  Let&apos;s go!
+                {onWinner && !isCustomResult && winner && winner.kind !== "collection" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onWinner(winner.id);
+                      onClose();
+                    }}
+                    className="btn-primary mt-5 w-full"
+                  >
+                    Use this pick
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className={onWinner && !isCustomResult && winner && winner.kind !== "collection" ? "btn-ghost mt-2 w-full" : "btn-primary mt-5 w-full"}
+                >
+                  {onWinner && !isCustomResult && winner && winner.kind !== "collection" ? "Close" : "Let's go!"}
                 </button>
               </div>
             )}

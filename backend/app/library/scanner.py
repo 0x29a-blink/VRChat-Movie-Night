@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from ..config import settings
@@ -87,6 +88,10 @@ def scan_folder(kind: str) -> None:
     with SessionLocal() as s:
         existing = {item.path: item for item in s.query(LibraryItem).filter_by(folder=folder_key).all()}
         seen: set[str] = set()
+        new_files: list[Path] = []
+        new_file_meta: dict[Path, tuple[str, int]] = {}  # file -> (key, size)
+        stale_existing: list[tuple[Path, "LibraryItem"]] = []  # existing rows needing a probe
+
         for file in folder.iterdir():
             if not file.is_file() or file.suffix.lower() not in VIDEO_EXTS:
                 continue
@@ -97,26 +102,67 @@ def scan_folder(kind: str) -> None:
             size = file.stat().st_size
             item = existing.get(key)
             if item is None:
-                duration = _probe_duration(file)
-                thumb = _make_thumb(file, duration)
-                s.add(
-                    LibraryItem(
-                        path=key,
-                        filename=file.name,
-                        title=file.stem,
-                        folder=folder_key,
-                        size=size,
-                        duration=duration,
-                        thumbnail=thumb,
-                    )
-                )
+                new_files.append(file)
+                new_file_meta[file] = (key, size)
             else:
                 if item.size != size:
                     item.size = size
-                if not item.duration:
-                    item.duration = _probe_duration(file)
-                if not item.thumbnail:
-                    item.thumbnail = _make_thumb(file, item.duration)
+                if not item.duration or not item.thumbnail:
+                    stale_existing.append((file, item))
+
+        # Probe duration for new files and any existing rows still missing a
+        # duration, in parallel, outside the DB session, using a bounded pool.
+        duration_targets = list(new_files) + [f for f, item in stale_existing if not item.duration]
+        durations: dict[Path, float] = {}
+        if duration_targets:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                durations = dict(zip(duration_targets, pool.map(_probe_duration, duration_targets)))
+
+        # Thumbnails use the (possibly just-probed) duration per file, matching
+        # the original serial code's ordering (duration is set before the thumb
+        # is generated for the same file).
+        def _duration_for(file: Path, item=None) -> float:
+            if file in durations:
+                return durations[file]
+            return item.duration if item is not None else 0.0
+
+        thumb_targets: list[Path] = []
+        thumb_durations: dict[Path, float] = {}
+        for file in new_files:
+            thumb_targets.append(file)
+            thumb_durations[file] = _duration_for(file)
+        for file, item in stale_existing:
+            if not item.thumbnail:
+                thumb_targets.append(file)
+                thumb_durations[file] = _duration_for(file, item)
+
+        thumbs: dict[Path, str] = {}
+        if thumb_targets:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                thumbs = dict(
+                    zip(thumb_targets, pool.map(lambda f: _make_thumb(f, thumb_durations[f]), thumb_targets))
+                )
+
+        for file in new_files:
+            key, size = new_file_meta[file]
+            s.add(
+                LibraryItem(
+                    path=key,
+                    filename=file.name,
+                    title=file.stem,
+                    folder=folder_key,
+                    size=size,
+                    duration=durations.get(file, 0.0),
+                    thumbnail=thumbs.get(file, ""),
+                )
+            )
+
+        for file, item in stale_existing:
+            if not item.duration:
+                item.duration = durations.get(file, 0.0)
+            if not item.thumbnail:
+                item.thumbnail = thumbs.get(file, "")
+
         # Remove DB entries for deleted files
         for path, item in existing.items():
             if path not in seen:

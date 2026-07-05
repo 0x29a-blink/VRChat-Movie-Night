@@ -256,7 +256,11 @@ def pick_file_id(
                 return int(f["id"])
 
     if file_idx is not None and 0 <= file_idx < len(files):
-        return int(files[file_idx]["id"])
+        chosen = files[file_idx]
+        if is_video(chosen) or not videos:
+            return int(chosen["id"])
+        # Index points at a non-video (nfo/srt/sample) while the torrent has
+        # real videos — fall through to largest-video selection instead.
 
     best = max(pool, key=lambda f: int(f.get("size") or 0))
     return int(best["id"])

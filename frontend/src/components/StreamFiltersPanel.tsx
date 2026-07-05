@@ -1,21 +1,106 @@
+import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
-import type { StreamFilterState } from "../streamFilters";
+import type { StreamFilterPreset, StreamFilterState } from "../streamFilters";
 import type { StreamResult } from "../types";
 import { RES_OPTIONS, streamKey } from "../streamListUtils";
 import { StreamResultRow } from "./StreamResultRow";
 
-export function StreamFiltersPanel({
+function PresetsBlock({
+  presets,
+  onApplyPreset,
+  onSavePreset,
+  onDeletePreset,
+}: {
+  presets: StreamFilterPreset[];
+  onApplyPreset: (name: string) => void;
+  onSavePreset: (name: string) => void;
+  onDeletePreset: (name: string) => void;
+}) {
+  const [selected, setSelected] = useState("");
+  const [newName, setNewName] = useState("");
+
+  return (
+    <div className="space-y-2 border-b border-white/10 pb-3">
+      <div className="text-xs font-semibold text-slate-300">Presets</div>
+      <div className="flex items-center gap-1.5">
+        <select
+          className="input flex-1"
+          value={selected}
+          onChange={(e) => {
+            setSelected(e.target.value);
+            if (e.target.value) onApplyPreset(e.target.value);
+          }}
+        >
+          <option value="">Select preset…</option>
+          {presets.map((p) => (
+            <option key={p.name} value={p.name}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        {selected && (
+          <button
+            type="button"
+            className="btn-ghost px-2 text-xs"
+            title="Delete preset"
+            onClick={() => {
+              onDeletePreset(selected);
+              setSelected("");
+            }}
+          >
+            ×
+          </button>
+        )}
+      </div>
+      <div className="flex items-center gap-1.5">
+        <input
+          type="text"
+          className="input flex-1"
+          placeholder="Preset name"
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+        />
+        <button
+          type="button"
+          className="btn-ghost px-2 text-xs"
+          disabled={!newName.trim()}
+          onClick={() => {
+            onSavePreset(newName.trim());
+            setSelected(newName.trim());
+            setNewName("");
+          }}
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function StreamFiltersPanel({
   filters,
   onChange,
   shownCount,
   totalCount,
   showSearch = false,
+  indexerOptions = [],
+  releaseGroupOptions = [],
+  presets,
+  onApplyPreset,
+  onSavePreset,
+  onDeletePreset,
 }: {
   filters: StreamFilterState;
   onChange: (patch: Partial<StreamFilterState>) => void;
   shownCount: number;
   totalCount: number;
   showSearch?: boolean;
+  indexerOptions?: string[];
+  releaseGroupOptions?: string[];
+  presets?: StreamFilterPreset[];
+  onApplyPreset?: (name: string) => void;
+  onSavePreset?: (name: string) => void;
+  onDeletePreset?: (name: string) => void;
 }) {
   return (
     <div className="card h-fit space-y-4 p-4">
@@ -25,6 +110,14 @@ export function StreamFiltersPanel({
           {shownCount} / {totalCount}
         </div>
       </div>
+      {presets && onApplyPreset && onSavePreset && onDeletePreset && (
+        <PresetsBlock
+          presets={presets}
+          onApplyPreset={onApplyPreset}
+          onSavePreset={onSavePreset}
+          onDeletePreset={onDeletePreset}
+        />
+      )}
       {showSearch && (
         <>
           <label className="block text-xs text-slate-400">
@@ -66,6 +159,40 @@ export function StreamFiltersPanel({
           <option value="AV1">AV1</option>
         </select>
       </label>
+      {indexerOptions.length > 0 && (
+        <label className="block text-xs text-slate-400">
+          Indexer
+          <select
+            className="input mt-1"
+            value={filters.indexer}
+            onChange={(e) => onChange({ indexer: e.target.value })}
+          >
+            <option value="">All</option>
+            {indexerOptions.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {releaseGroupOptions.length > 0 && (
+        <label className="block text-xs text-slate-400">
+          Release group
+          <select
+            className="input mt-1"
+            value={filters.releaseGroup}
+            onChange={(e) => onChange({ releaseGroup: e.target.value })}
+          >
+            <option value="">All</option>
+            {releaseGroupOptions.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <label className="block text-xs text-slate-400">
         Max size (GB)
         <input
@@ -167,6 +294,10 @@ export function StreamResultsPanel({
   onCopyLink,
   filters,
   onFiltersChange,
+  presets,
+  onApplyPreset,
+  onSavePreset,
+  onDeletePreset,
 }: {
   streams: StreamResult[];
   filtered: StreamResult[];
@@ -178,8 +309,36 @@ export function StreamResultsPanel({
   onCopyLink?: (s: import("../types").StreamResult) => void;
   filters: StreamFilterState;
   onFiltersChange: (patch: Partial<StreamFilterState>) => void;
+  presets?: StreamFilterPreset[];
+  onApplyPreset?: (name: string) => void;
+  onSavePreset?: (name: string) => void;
+  onDeletePreset?: (name: string) => void;
 }) {
   const searchText = filters.searchText ?? "";
+
+  const indexerOptions = useMemo(
+    () =>
+      Array.from(new Set(streams.map((s) => s.indexer).filter((v): v is string => !!v))).sort(),
+    [streams]
+  );
+  const releaseGroupOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(streams.map((s) => s.release_group).filter((v): v is string => !!v))
+      ).sort(),
+    [streams]
+  );
+
+  const PAGE_SIZE = 100;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  // Reset paging when the result set fundamentally changes (new search) or any
+  // filter changes — filtered.length is a cheap, adequate proxy for both.
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [streams, filters]);
+
+  const visible = filtered.slice(0, visibleCount);
 
   return (
     <div className="min-w-0 space-y-4">
@@ -196,7 +355,9 @@ export function StreamResultsPanel({
           />
         </label>
         <div className="shrink-0 text-xs text-slate-500 sm:text-right">
-          {filtered.length} of {streams.length} streams
+          {filtered.length > visibleCount
+            ? `showing ${visibleCount} of ${filtered.length} matches (${streams.length} total)`
+            : `${filtered.length} of ${streams.length} streams`}
         </div>
       </div>
       <div className="grid min-w-0 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
@@ -205,6 +366,12 @@ export function StreamResultsPanel({
           onChange={onFiltersChange}
           shownCount={filtered.length}
           totalCount={streams.length}
+          indexerOptions={indexerOptions}
+          releaseGroupOptions={releaseGroupOptions}
+          presets={presets}
+          onApplyPreset={onApplyPreset}
+          onSavePreset={onSavePreset}
+          onDeletePreset={onDeletePreset}
         />
         <div className="min-w-0 space-y-2">
           {filtered.length === 0 ? (
@@ -212,19 +379,31 @@ export function StreamResultsPanel({
               No streams match your search or filters.
             </div>
           ) : (
-            filtered.map((s, i) => (
-              <StreamResultRow
-                key={streamKey(s) || String(i)}
-                stream={s}
-                index={i}
-                grabbed={grabbed}
-                onGrabCached={onGrabCached}
-                onGrabCache={onGrabCache}
-                showLocalDownload={showLocalDownload}
-                onLocalDownload={onLocalDownload}
-                onCopyLink={onCopyLink}
-              />
-            ))
+            <>
+              {visible.map((s, i) => (
+                <StreamResultRow
+                  key={streamKey(s) || String(i)}
+                  stream={s}
+                  index={i}
+                  grabbed={grabbed}
+                  onGrabCached={onGrabCached}
+                  onGrabCache={onGrabCache}
+                  showLocalDownload={showLocalDownload}
+                  onLocalDownload={onLocalDownload}
+                  onCopyLink={onCopyLink}
+                />
+              ))}
+              {filtered.length > visibleCount && (
+                <button
+                  type="button"
+                  className="btn-ghost w-full text-xs"
+                  onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
+                >
+                  Show {Math.min(PAGE_SIZE, filtered.length - visibleCount)} more (
+                  {filtered.length - visibleCount} hidden)
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>

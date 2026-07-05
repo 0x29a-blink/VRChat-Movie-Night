@@ -7,11 +7,11 @@ from typing import Any
 
 from .controller import OBSBusyError, OBSController, OBSNotConnectedError
 from .stream_presets import (
+    ENCODER_PRESETS,
+    VIDEO_PRESETS,
     encoder_preset,
     merge_output_settings,
     video_preset,
-    ENCODER_PRESETS,
-    VIDEO_PRESETS,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,10 @@ class StreamSettingsService:
         return self._controller._call(fn)  # noqa: SLF001
 
     def streaming_active(self) -> bool:
-        return bool(self._controller.stream_status().get("active"))
+        try:
+            return bool(self._controller.stream_status().get("active"))
+        except (OBSNotConnectedError, OBSBusyError):
+            return False
 
     def find_stream_output_name(self) -> str | None:
         def _do(req):

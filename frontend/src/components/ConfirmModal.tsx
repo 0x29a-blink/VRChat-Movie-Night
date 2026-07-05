@@ -1,4 +1,30 @@
+import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
+
+function ModalShell({
+  open,
+  onCancel,
+  children,
+}: {
+  open: boolean;
+  onCancel: () => void;
+  children: ReactNode;
+}) {
+  if (!open) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 p-4" onClick={onCancel}>
+      <div
+        className="card w-full max-w-sm p-5"
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {children}
+      </div>
+    </div>,
+    document.body
+  );
+}
 
 export function ConfirmModal({
   open,
@@ -13,7 +39,7 @@ export function ConfirmModal({
 }: {
   open: boolean;
   title: string;
-  message: React.ReactNode;
+  message: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
@@ -21,33 +47,24 @@ export function ConfirmModal({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  if (!open) return null;
-
-  return createPortal(
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 p-4" onClick={onCancel}>
-      <div
-        className="card w-full max-w-sm p-5"
-        onClick={(e) => e.stopPropagation()}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <h3 className={`text-base font-semibold ${danger ? "text-red-300" : "text-white"}`}>{title}</h3>
-        <div className="mt-2 text-sm text-slate-300">{message}</div>
-        <div className="mt-5 flex gap-2">
-          <button type="button" onClick={onCancel} disabled={busy} className="btn-ghost flex-1">
-            {cancelLabel}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={busy}
-            className={`btn-primary flex-1 ${danger ? "!bg-red-600 hover:!bg-red-500" : ""}`}
-          >
-            {busy ? "Working…" : confirmLabel}
-          </button>
-        </div>
+  return (
+    <ModalShell open={open} onCancel={onCancel}>
+      <h3 className={`text-base font-semibold ${danger ? "text-red-300" : "text-white"}`}>{title}</h3>
+      <div className="mt-2 text-sm text-slate-300">{message}</div>
+      <div className="mt-5 flex gap-2">
+        <button type="button" onClick={onCancel} disabled={busy} className="btn-ghost flex-1">
+          {cancelLabel}
+        </button>
+        <button
+          type="button"
+          onClick={onConfirm}
+          disabled={busy}
+          className={`btn-primary flex-1 ${danger ? "!bg-red-600 hover:!bg-red-500" : ""}`}
+        >
+          {busy ? "Working…" : confirmLabel}
+        </button>
       </div>
-    </div>,
-    document.body
+    </ModalShell>
   );
 }
 
@@ -67,7 +84,7 @@ export function PromptModal({
 }: {
   open: boolean;
   title: string;
-  message?: React.ReactNode;
+  message?: ReactNode;
   value: string;
   onChange: (v: string) => void;
   confirmLabel?: string;
@@ -78,36 +95,27 @@ export function PromptModal({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  if (!open) return null;
-
-  return createPortal(
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 p-4" onClick={onCancel}>
-      <div
-        className="card w-full max-w-sm p-5"
-        onClick={(e) => e.stopPropagation()}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <h3 className="text-base font-semibold text-white">{title}</h3>
-        {message && <div className="mt-2 text-sm text-slate-300">{message}</div>}
-        <input
-          type={inputType}
-          className="input mt-4 w-full"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-          autoFocus
-          onKeyDown={(e) => e.key === "Enter" && value.trim() && onConfirm()}
-        />
-        <div className="mt-5 flex gap-2">
-          <button type="button" onClick={onCancel} disabled={busy} className="btn-ghost flex-1">
-            {cancelLabel}
-          </button>
-          <button type="button" onClick={onConfirm} disabled={busy || !value.trim()} className="btn-primary flex-1">
-            {busy ? "Working…" : confirmLabel}
-          </button>
-        </div>
+  return (
+    <ModalShell open={open} onCancel={onCancel}>
+      <h3 className="text-base font-semibold text-white">{title}</h3>
+      {message && <div className="mt-2 text-sm text-slate-300">{message}</div>}
+      <input
+        type={inputType}
+        className="input mt-4 w-full"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoFocus
+        onKeyDown={(e) => e.key === "Enter" && value.trim() && onConfirm()}
+      />
+      <div className="mt-5 flex gap-2">
+        <button type="button" onClick={onCancel} disabled={busy} className="btn-ghost flex-1">
+          {cancelLabel}
+        </button>
+        <button type="button" onClick={onConfirm} disabled={busy || !value.trim()} className="btn-primary flex-1">
+          {busy ? "Working…" : confirmLabel}
+        </button>
       </div>
-    </div>,
-    document.body
+    </ModalShell>
   );
 }

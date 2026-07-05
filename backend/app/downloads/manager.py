@@ -15,6 +15,7 @@ from ..config import settings
 from ..db import SessionLocal
 from ..downloads.iso_extract import extract_disc_image
 from ..downloads.link_meta import DownloadLinkMeta, apply_link_meta_to_job, job_link_meta
+from ..events import record_event
 from ..models import Job, LibraryItem
 from ..ws import hub
 
@@ -32,6 +33,8 @@ DISC_IMAGE_EXTS = {".iso", ".img"}
 DOWNLOADABLE_EXTS = VIDEO_EXTS | DISC_IMAGE_EXTS
 # Substrings that mark yt-dlp/ffmpeg temp files (incl. HLS ".part-FragN").
 TEMP_MARKERS = (".part", ".ytdl", ".temp", ".tmp", ".download", "-frag", ".frag")
+# ffmpeg -progress emits every ~1s; this many seconds of silence = hung/dead CDN.
+HLS_NO_OUTPUT_TIMEOUT_SEC = 300
 
 _ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -182,8 +185,18 @@ class DownloadManager:
         self._sem: asyncio.Semaphore | None = None
 
     def start(self) -> None:
+        self.set_concurrency_limit(
+            int(settings_store.get("max_concurrent_downloads", settings.max_concurrent_downloads))
+        )
+        self.recover_interrupted_jobs()
+
+    def set_concurrency_limit(self, limit: int) -> None:
+        self._sem = asyncio.Semaphore(max(1, int(limit or 1)))
+
+    def recover_interrupted_jobs(self) -> None:
         limit = int(settings_store.get("max_concurrent_downloads", settings.max_concurrent_downloads))
-        self._sem = asyncio.Semaphore(max(1, limit))
+        if self._sem is None:
+            self.set_concurrency_limit(limit)
         # Recover: any job left "downloading"/"queued" from a previous run is stale.
         with SessionLocal() as s:
             for job in s.query(Job).filter(
@@ -201,6 +214,7 @@ class DownloadManager:
         title: str = "",
         referer: str = "",
         link: DownloadLinkMeta | None = None,
+        force_kind: str = "",
     ) -> dict:
         job_id = uuid.uuid4().hex
         with SessionLocal() as s:
@@ -208,13 +222,22 @@ class DownloadManager:
                 id=job_id,
                 type=type_,
                 source=source,
+                restart_source=source,
+                download_mode="normal",
                 title=title or "(resolving…)",
                 status="queued",
             )
             apply_link_meta_to_job(job, link)
+            if job.link_tmdb_id or job.link_stremio_id:
+                job.link_status = "pending"
             s.add(job)
             s.commit()
             data = job.to_dict()
+        if force_kind in ("direct", "hls", "ytdlp"):
+            # Stashed here (same dict used for torbox filename hints) so
+            # `_execute_download` can force the dispatch kind instead of
+            # re-probing the URL; consumed once and popped.
+            self._cache_meta[job_id] = {"force_kind": force_kind}
         await hub.broadcast("download_update", data)
         self._tasks[job_id] = asyncio.create_task(self._run(job_id, referer))
         return data
@@ -234,10 +257,17 @@ class DownloadManager:
                 id=job_id,
                 type="torrent",
                 source=magnet,
+                restart_source=magnet,
+                download_mode="torbox_cache",
+                cache_file_idx=file_idx,
+                cache_filename_hint=filename_hint or "",
+                cache_size_bytes=int(size_bytes or 0),
                 title=title or "Caching on TorBox…",
                 status="caching",
             )
             apply_link_meta_to_job(job, link)
+            if job.link_tmdb_id or job.link_stremio_id:
+                job.link_status = "pending"
             s.add(job)
             s.commit()
             data = job.to_dict()
@@ -266,10 +296,17 @@ class DownloadManager:
                 id=job_id,
                 type="torrent",
                 source=playback_url,
+                restart_source=playback_url,
+                download_mode="torbox_playback_cache",
+                cache_file_idx=file_idx,
+                cache_filename_hint=filename_hint or "",
+                cache_size_bytes=int(size_bytes or 0),
                 title=title or "Caching on TorBox…",
                 status="caching",
             )
             apply_link_meta_to_job(job, link)
+            if job.link_tmdb_id or job.link_stremio_id:
+                job.link_status = "pending"
             s.add(job)
             s.commit()
             data = job.to_dict()
@@ -298,15 +335,41 @@ class DownloadManager:
                 await hub.broadcast("download_update", data)
         return True
 
-    async def restart(self, job_id: str) -> dict | None:
+    async def restart(self, job_id: str, retry_mode: str = "auto") -> dict | None:
+        """Re-queue a job. `retry_mode` ("auto"/"direct"/"hls"/"ytdlp") overrides
+        how a *normal* job's download kind is chosen; TorBox-mode jobs ignore
+        it and keep their cache semantics."""
         with SessionLocal() as s:
             job = s.get(Job, job_id)
             if not job:
                 return None
-            type_, source, title = job.type, job.source, job.title
+            type_, source, title = job.type, job.restart_source or job.source, job.title
+            mode = job.download_mode or "normal"
+            file_idx = job.cache_file_idx
+            filename_hint = job.cache_filename_hint or ""
+            size_bytes = int(job.cache_size_bytes or 0)
             link = job_link_meta(job)
             link_obj = DownloadLinkMeta(**link) if link else None
-        return await self.add(type_, source, title=title, link=link_obj)
+        if mode == "torbox_cache":
+            return await self.add_torbox_cache(
+                source,
+                title=title,
+                file_idx=file_idx,
+                filename_hint=filename_hint or title,
+                size_bytes=size_bytes,
+                link=link_obj,
+            )
+        if mode == "torbox_playback_cache":
+            return await self.add_torbox_playback_cache(
+                source,
+                title=title,
+                file_idx=file_idx,
+                filename_hint=filename_hint or title,
+                size_bytes=size_bytes,
+                link=link_obj,
+            )
+        force_kind = retry_mode if retry_mode in ("direct", "hls", "ytdlp") else ""
+        return await self.add(type_, source, title=title, link=link_obj, force_kind=force_kind)
 
     async def remove(self, job_id: str) -> bool:
         if job_id in self._procs:
@@ -318,6 +381,24 @@ class DownloadManager:
                 s.commit()
         await hub.broadcast("download_removed", {"id": job_id})
         return True
+
+    async def clear_by_status(self, statuses: list[str]) -> list[str]:
+        """Bulk-delete terminal-status jobs. Only ever touches
+        completed/failed/cancelled rows (callers must pre-validate the
+        statuses list); reuses `remove` per id so cancellation/broadcast
+        semantics stay identical to single-job delete."""
+        terminal = {"completed", "failed", "cancelled"}
+        allowed = [s_ for s_ in statuses if s_ in terminal]
+        if not allowed:
+            return []
+        with SessionLocal() as s:
+            ids = [
+                j.id
+                for j in s.query(Job).filter(Job.status.in_(allowed)).all()
+            ]
+        for job_id in ids:
+            await self.remove(job_id)
+        return ids
 
     def list_jobs(self) -> list[dict]:
         with SessionLocal() as s:
@@ -585,9 +666,13 @@ class DownloadManager:
         out_dir = settings.folder_for(type_)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        filename_hint = self._cache_meta.get(job_id, {}).get("filename_hint", "")
+        cache_meta = self._cache_meta.pop(job_id, {})
+        filename_hint = cache_meta.get("filename_hint", "")
+        force_kind = cache_meta.get("force_kind", "")
         try:
-            if type_ == "m3u8":
+            if force_kind in ("direct", "hls", "ytdlp"):
+                kind = force_kind
+            elif type_ == "m3u8":
                 kind = "hls"
             else:
                 kind = await asyncio.to_thread(
@@ -642,9 +727,9 @@ class DownloadManager:
 
             try:
                 await asyncio.to_thread(scan_folder, type_)
-                await self._apply_job_library_link(job_id, final_path)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                await self._mark_job_link_failed(job_id, f"Library scan failed: {exc}")
+            await self._apply_job_library_link(job_id, final_path)
         else:
             await self._finish(job_id, "failed", error=err)
         self._hls_out.pop(job_id, None)
@@ -806,6 +891,7 @@ class DownloadManager:
         """Download a single file over HTTP(S) without ffmpeg (TorBox CDN, etc.)."""
         headers = {"Referer": referer} if referer else {}
         out_path: Path | None = None
+        temp_path: Path | None = None
         try:
             async with httpx.AsyncClient(follow_redirects=True, timeout=None) as client:
                 async with client.stream("GET", source, headers=headers) as resp:
@@ -821,8 +907,24 @@ class DownloadManager:
                     while out_path.exists():
                         out_path = out_dir / f"{base} ({i}){ext}"
                         i += 1
+                    temp_path = out_path.with_name(f"{out_path.name}.part")
+                    j = 1
+                    while temp_path.exists():
+                        temp_path = out_path.with_name(f"{out_path.name}.part{j}")
+                        j += 1
 
                     total = int(resp.headers.get("content-length") or 0)
+                    estimated = False
+                    if not total:
+                        with SessionLocal() as s:
+                            job = s.get(Job, job_id)
+                            hint = (
+                                int(getattr(job, "cache_size_bytes", 0) or 0)
+                                if job
+                                else 0
+                            )
+                        if hint > 0:
+                            total, estimated = hint, True
                     if total:
                         with SessionLocal() as s:
                             job = s.get(Job, job_id)
@@ -835,9 +937,13 @@ class DownloadManager:
                     t0 = time.time()
                     last_dl = 0
 
-                    with open(out_path, "wb") as fh:
+                    with open(temp_path, "wb") as fh:
                         async for chunk in resp.aiter_bytes(chunk_size=1024 * 256):
                             if job_id in self._cancelled:
+                                try:
+                                    temp_path.unlink(missing_ok=True)
+                                except OSError:
+                                    pass
                                 return 1, "", "Cancelled"
                             fh.write(chunk)
                             downloaded += len(chunk)
@@ -846,14 +952,19 @@ class DownloadManager:
                                 speed = (downloaded - last_dl) / (now - t0) if now > t0 else 0
                                 last_dl = downloaded
                                 t0 = now
+                                if estimated and downloaded > total:
+                                    total = downloaded
+                                cap = 99.0 if estimated else 99.9
                                 pct = (
-                                    min(downloaded / total * 100.0, 99.9)
+                                    min(downloaded / total * 100.0, cap)
                                     if total
                                     else 0.0
                                 )
                                 with SessionLocal() as s:
                                     job = s.get(Job, job_id)
                                     if job:
+                                        job.downloaded = downloaded
+                                        job.total = total
                                         job.percent = pct
                                         job.speed = _fmt_speed(speed)
                                         if speed > 0 and total:
@@ -866,11 +977,24 @@ class DownloadManager:
                                         )
                                 last_emit = now
 
+                    if estimated and downloaded > total:
+                        total = downloaded
+                    with SessionLocal() as s:
+                        job = s.get(Job, job_id)
+                        if job:
+                            job.downloaded = downloaded
+                            if total:
+                                job.total = total
+                            s.commit()
+
+                    temp_path.replace(out_path)
             return 0, str(out_path), ""
         except Exception as exc:  # noqa: BLE001
-            if out_path:
+            for path in (temp_path, out_path):
+                if not path:
+                    continue
                 try:
-                    out_path.unlink(missing_ok=True)
+                    path.unlink(missing_ok=True)
                 except OSError:
                     pass
             return 1, "", f"Direct download failed: {exc}"
@@ -909,7 +1033,18 @@ class DownloadManager:
         state = {"last_size": 0.0, "last_t": time.time(), "last_emit": 0.0}
 
         assert proc.stdout is not None
-        async for raw in proc.stdout:
+        stalled = False
+        while True:
+            try:
+                raw = await asyncio.wait_for(
+                    proc.stdout.readline(), timeout=HLS_NO_OUTPUT_TIMEOUT_SEC
+                )
+            except asyncio.TimeoutError:
+                stalled = True
+                _kill_tree(proc.pid)
+                break
+            if not raw:
+                break  # EOF
             line = raw.decode("utf-8", "replace").strip()
             if not line:
                 continue
@@ -925,6 +1060,8 @@ class DownloadManager:
                     tail.pop(0)
 
         rc = await proc.wait()
+        if stalled:
+            return 1, f"ffmpeg produced no output for {HLS_NO_OUTPUT_TIMEOUT_SEC}s (stalled stream) — download aborted"
         if rc == 0:
             return 0, ""
         err = "\n".join(tail[-8:]) or f"ffmpeg exited with code {rc}"
@@ -1097,6 +1234,7 @@ class DownloadManager:
 
     async def _finish(self, job_id: str, status_: str, *, output_path: str = "",
                       percent: float | None = None, error: str = "") -> None:
+        self._tasks.pop(job_id, None)
         with SessionLocal() as s:
             job = s.get(Job, job_id)
             if not job:
@@ -1116,6 +1254,21 @@ class DownloadManager:
             s.commit()
             data = job.to_dict()
         self._cancelled.discard(job_id)
+        if status_ == "completed":
+            record_event("download_complete", data.get("title") or "download")
+        elif status_ == "failed":
+            record_event("download_failed", data.get("title") or "download", detail=data.get("error") or "")
+        await hub.broadcast("download_update", data)
+
+    async def _mark_job_link_failed(self, job_id: str, error: str) -> None:
+        with SessionLocal() as s:
+            job = s.get(Job, job_id)
+            if not job or not (job.link_tmdb_id or job.link_stremio_id):
+                return
+            job.link_status = "failed"
+            job.link_error = error
+            s.commit()
+            data = job.to_dict()
         await hub.broadcast("download_update", data)
 
     async def _apply_job_library_link(self, job_id: str, output_path: str) -> None:
@@ -1131,6 +1284,7 @@ class DownloadManager:
                 return
             lib = s.query(LibraryItem).filter(LibraryItem.path == path).first()
             if not lib:
+                await self._mark_job_link_failed(job_id, "Downloaded file was not found in the library after scan")
                 return
             try:
                 if stremio:
@@ -1154,9 +1308,13 @@ class DownloadManager:
                         watchlist_item_id=job.link_watchlist_id,
                     )
                 s.commit()
+                job.link_status = "linked"
+                job.link_error = ""
+                s.commit()
                 linked_title = lib.display_title()
-            except Exception:
+            except Exception as exc:  # noqa: BLE001
                 s.rollback()
+                await self._mark_job_link_failed(job_id, f"Could not apply metadata link: {exc}")
                 return
 
         from ..playqueue.manager import manager as queue_manager

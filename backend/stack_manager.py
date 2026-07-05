@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 import sys
 import time
@@ -110,20 +109,43 @@ def stop_saved_stack(*, quiet: bool = False) -> int:
 
 
 def stop_orphan_mediamtx(*, quiet: bool = False) -> int:
-    """Kill stray mediamtx.exe not tied to our console (common after closing CMD with X)."""
+    """Kill stray project-owned mediamtx.exe processes left after closing CMD with X."""
     if sys.platform != "win32":
         return 0
+    ps = (
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+        "Get-CimInstance Win32_Process -Filter \"Name = 'mediamtx.exe'\" | "
+        "Select-Object ProcessId,CommandLine,ExecutablePath | ConvertTo-Json -Compress"
+    )
     r = subprocess.run(
-        ["taskkill", "/IM", "mediamtx.exe", "/F"],
+        ["powershell", "-NoProfile", "-Command", ps],
         capture_output=True,
         text=True,
         creationflags=CREATE_NO_WINDOW,
     )
-    if r.returncode == 0:
-        if not quiet:
-            print("[stop] Ended mediamtx.exe process(es)")
-        return 1
-    return 0
+    if r.returncode != 0 or not (r.stdout or "").strip():
+        return 0
+    try:
+        rows = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return 0
+    if isinstance(rows, dict):
+        rows = [rows]
+    root = str(PROJECT_ROOT).lower()
+    mediamtx_dir = str(PROJECT_ROOT / "MediaMTX").lower()
+    stopped = 0
+    for row in rows or []:
+        haystack = " ".join(
+            str(row.get(k) or "") for k in ("CommandLine", "ExecutablePath")
+        ).lower()
+        if root not in haystack and mediamtx_dir not in haystack:
+            if not quiet:
+                print(f"[stop] Leaving unrelated mediamtx.exe PID {row.get('ProcessId')} alone")
+            continue
+        pid = int(row.get("ProcessId") or 0)
+        if kill_pid_tree(pid, name="mediamtx"):
+            stopped += 1
+    return stopped
 
 
 def cleanup_before_start(*, quiet: bool = False) -> None:

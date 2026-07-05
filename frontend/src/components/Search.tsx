@@ -18,10 +18,11 @@ import {
   readStreamLaunchFromLocation,
   type StreamLaunch,
 } from "../streamOpenUrl";
-import { loadStreamFilters, saveStreamFilters } from "../streamFilters";
 import { copyStreamDownloadLink, saveStreamToPc } from "../localDownload";
 import { filterAndSortStreams, streamKey } from "../streamListUtils";
 import { isAnimeStremioId, animeProviderLabel } from "../animeIds";
+import { useStreamFilterState } from "../useStreamFilterState";
+import { useSeasonEpisodeState } from "../useSeasonEpisodeState";
 
 type MoviesMode = "search" | "browse";
 
@@ -33,8 +34,6 @@ type MetadataProvider = {
   kind: "tmdb" | "anime";
   tmdb_id?: number;
 };
-
-const INITIAL_FILTERS = loadStreamFilters();
 
 function normalizeSeasons(rows: SeasonRow[]): SeasonRow[] {
   return rows
@@ -96,53 +95,58 @@ export function Search({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
 
   const [selected, setSelected] = useState<SearchResult | null>(null);
-  const [seasons, setSeasons] = useState<{ season_number: number; name: string; episode_count: number }[]>([]);
-  const [season, setSeason] = useState<number | undefined>();
-  const [episode, setEpisode] = useState<number | undefined>();
-  const [episodes, setEpisodes] = useState<TmdbEpisode[]>([]);
-  const [loadingEpisodes, setLoadingEpisodes] = useState(false);
+  const {
+    seasons,
+    setSeasons,
+    season,
+    setSeason,
+    episode,
+    setEpisode,
+    episodes,
+    setEpisodes,
+    loadingEpisodes,
+    setLoadingEpisodes,
+  } = useSeasonEpisodeState();
   const [metadataProviders, setMetadataProviders] = useState<MetadataProvider[]>([]);
   const [activeMetadataKey, setActiveMetadataKey] = useState("");
+  const metadataProvidersRef = useRef<MetadataProvider[]>([]);
+  const activeMetadataKeyRef = useRef("");
+
+  const syncMetadataLookup = (providers: MetadataProvider[], key: string) => {
+    metadataProvidersRef.current = providers;
+    activeMetadataKeyRef.current = key;
+    setMetadataProviders(providers);
+    setActiveMetadataKey(key);
+  };
 
   const [streams, setStreams] = useState<StreamResult[]>([]);
   const [loadingStreams, setLoadingStreams] = useState(false);
   const [streamsFetched, setStreamsFetched] = useState(false);
   const [grabbed, setGrabbed] = useState<Set<string>>(new Set());
   const streamsRequest = useRef(0);
-
-  // filters
-  const [minRes, setMinRes] = useState(INITIAL_FILTERS.minRes);
-  const [codec, setCodec] = useState(INITIAL_FILTERS.codec);
-  const [maxSize, setMaxSize] = useState(INITIAL_FILTERS.maxSize);
-  const [cachedOnly, setCachedOnly] = useState(INITIAL_FILTERS.cachedOnly);
-  const [minSeeders, setMinSeeders] = useState(INITIAL_FILTERS.minSeeders);
-  const [sortBy, setSortBy] = useState<"quality" | "size" | "seeders">(INITIAL_FILTERS.sortBy);
-  const [audioLang, setAudioLang] = useState(INITIAL_FILTERS.audioLang);
-  const [subtitleType, setSubtitleType] = useState(INITIAL_FILTERS.subtitleType);
-  const [preferDub, setPreferDub] = useState(INITIAL_FILTERS.preferDub);
-  const [searchText, setSearchText] = useState("");
   const [downloadQueued, setDownloadQueued] = useState(false);
   const [libraryMatch, setLibraryMatch] = useState<LibraryItem | null>(null);
   const [activeVideoId, setActiveVideoId] = useState("");
   const processedLaunch = useRef(false);
-
-  useEffect(() => {
-    saveStreamFilters({
-      searchText,
-      minRes,
-      codec,
-      maxSize,
-      cachedOnly,
-      minSeeders,
-      sortBy,
-      audioLang,
-      subtitleType,
-      preferDub,
-    });
-  }, [searchText, minRes, codec, maxSize, cachedOnly, minSeeders, sortBy, audioLang, subtitleType, preferDub]);
+  const { filters, updateFilters, presets, savePreset, applyPreset, deletePreset } = useStreamFilterState();
+  const {
+    searchText,
+    minRes,
+    codec,
+    maxSize,
+    cachedOnly,
+    minSeeders,
+    sortBy,
+    audioLang,
+    subtitleType,
+    preferDub,
+    indexer,
+    releaseGroup,
+  } = filters;
 
   const applyStreamLaunch = async (launch: StreamLaunch) => {
     if (launch.source === "stremio") {
@@ -211,6 +215,7 @@ export function Search({
     setError("");
     setSelected(null);
     setStreams([]);
+    setSearched(true);
     try {
       setResults(await api.search(query.trim()));
     } catch (err: any) {
@@ -252,7 +257,7 @@ export function Search({
     const provider = providers.find((p) => p.key === providerKey);
     if (!provider) return r;
 
-    setActiveMetadataKey(providerKey);
+    syncMetadataLookup(providers, providerKey);
     setSeason(undefined);
     setEpisode(undefined);
     setEpisodes([]);
@@ -318,8 +323,9 @@ export function Search({
       if (initialEpisode != null) {
         setEpisode(initialEpisode);
         const ep = eps.find((e) => e.episode_number === initialEpisode);
-        if (ep?.video_stremio_id) setActiveVideoId(ep.video_stremio_id);
-        await loadStreams(r, pickSeason, initialEpisode);
+        const videoId = ep?.video_stremio_id || "";
+        if (videoId) setActiveVideoId(videoId);
+        await loadStreams(r, pickSeason, initialEpisode, { episodeRows: eps, videoId });
       }
     } catch {
       setEpisodes([]);
@@ -346,8 +352,7 @@ export function Search({
     setLibraryMatch(null);
     setActiveVideoId("");
     setError("");
-    setMetadataProviders([]);
-    setActiveMetadataKey("");
+    syncMetadataLookup([], "");
 
     if (r.type === "series" && isAnimeTitle(r) && r.stremio_id) {
       try {
@@ -363,7 +368,6 @@ export function Search({
         }
 
         const providers = buildMetadataProviders(r, tmdbCandidates);
-        setMetadataProviders(providers);
 
         if (providers.length) {
           const defaultKey = pickDefaultMetadataKey(r, providers);
@@ -473,7 +477,12 @@ export function Search({
     setStreamsFetched(false);
   };
 
-  const loadStreams = async (r: SearchResult, s?: number, ep?: number) => {
+  const loadStreams = async (
+    r: SearchResult,
+    s?: number,
+    ep?: number,
+    lookup?: { episodeRows?: TmdbEpisode[]; videoId?: string }
+  ) => {
     const reqId = ++streamsRequest.current;
     setLoadingStreams(true);
     setStreamsFetched(true);
@@ -481,20 +490,22 @@ export function Search({
     setStreams([]);
     try {
       let res;
-      const provider = metadataProviders.find((p) => p.key === activeMetadataKey);
+      const provider = metadataProvidersRef.current.find((p) => p.key === activeMetadataKeyRef.current);
       const tmdbId = provider?.kind === "tmdb" ? provider.tmdb_id : r.tmdb_id;
       const useTmdb =
         provider?.kind === "tmdb" || (!provider && !isAnimeTitle(r)) || (!provider && r.tmdb_id && !r.stremio_id);
+      const episodeRows = lookup?.episodeRows ?? episodes;
+      const videoId = lookup?.videoId ?? activeVideoId;
 
       if (useTmdb && tmdbId && (s != null && ep != null || !isAnimeTitle(r))) {
         res = await api.streams(tmdbId, r.type, s, ep);
       } else if (isAnimeTitle(r) && r.stremio_id) {
-        const epRow = episodes.find((e) => e.episode_number === ep);
-        const videoId = activeVideoId || epRow?.video_stremio_id || "";
-        if (!videoId && s != null && ep != null) {
+        const epRow = episodeRows.find((e) => e.episode_number === ep);
+        const resolvedVideoId = videoId || epRow?.video_stremio_id || "";
+        if (!resolvedVideoId && s != null && ep != null) {
           throw new Error("No episode video id from AIOStreams meta — pick an episode again.");
         }
-        res = await api.streamsStremio(videoId, r.stremio_id, s, ep);
+        res = await api.streamsStremio(resolvedVideoId, r.stremio_id, s, ep);
       } else if (tmdbId) {
         res = await api.streams(tmdbId, r.type, s, ep);
       } else if (r.stremio_id) {
@@ -601,22 +612,25 @@ export function Search({
         audioLang,
         subtitleType,
         preferDub,
+        indexer,
+        releaseGroup,
       }),
-    [streams, searchText, minRes, codec, maxSize, cachedOnly, minSeeders, sortBy, audioLang, subtitleType, preferDub]
+    [
+      streams,
+      searchText,
+      minRes,
+      codec,
+      maxSize,
+      cachedOnly,
+      minSeeders,
+      sortBy,
+      audioLang,
+      subtitleType,
+      preferDub,
+      indexer,
+      releaseGroup,
+    ]
   );
-
-  const updateFilters = (patch: Partial<typeof INITIAL_FILTERS>) => {
-    if (patch.searchText !== undefined) setSearchText(patch.searchText);
-    if (patch.minRes !== undefined) setMinRes(patch.minRes);
-    if (patch.codec !== undefined) setCodec(patch.codec);
-    if (patch.maxSize !== undefined) setMaxSize(patch.maxSize);
-    if (patch.cachedOnly !== undefined) setCachedOnly(patch.cachedOnly);
-    if (patch.minSeeders !== undefined) setMinSeeders(patch.minSeeders);
-    if (patch.sortBy !== undefined) setSortBy(patch.sortBy);
-    if (patch.audioLang !== undefined) setAudioLang(patch.audioLang);
-    if (patch.subtitleType !== undefined) setSubtitleType(patch.subtitleType);
-    if (patch.preferDub !== undefined) setPreferDub(patch.preferDub);
-  };
 
   return (
     <div className="min-w-0 space-y-5">
@@ -688,6 +702,12 @@ export function Search({
         </div>
       )}
 
+      {mode === "search" && !selected && searched && !searching && !error && results.length === 0 && (
+        <div className="rounded-lg border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
+          No titles found. Try adding the release year, checking the original title, or switching to Browse.
+        </div>
+      )}
+
       {/* Selected title -> streams */}
       {selected && (
         <div className="min-w-0">
@@ -698,8 +718,7 @@ export function Search({
               setSelected(null);
               setStreams([]);
               setStreamsFetched(false);
-              setMetadataProviders([]);
-              setActiveMetadataKey("");
+              syncMetadataLookup([], "");
             }}
             className="btn-ghost mb-4 text-xs"
           >
@@ -878,13 +897,24 @@ export function Search({
                 audioLang,
                 subtitleType,
                 preferDub,
+                indexer,
+                releaseGroup,
               }}
               onFiltersChange={updateFilters}
+              presets={presets}
+              onApplyPreset={applyPreset}
+              onSavePreset={savePreset}
+              onDeletePreset={deletePreset}
             />
           )}
 
-          {!loadingStreams && streamsFetched && streams.length === 0 && selected.type === "movie" && (
-            <div className="py-6 text-center text-sm text-slate-500">No downloadable streams found.</div>
+          {!loadingStreams && streamsFetched && streams.length === 0 && (
+            <div className="rounded-lg border border-dashed border-white/10 px-4 py-6 text-center text-sm text-slate-500">
+              <p>No downloadable streams found for {selected.title}.</p>
+              <p className="mt-1 text-xs">
+                Try another season or episode, adjust filters, or check that AIOStreams is configured in Settings.
+              </p>
+            </div>
           )}
 
           {downloadQueued && selected && (

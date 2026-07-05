@@ -5,14 +5,14 @@ from __future__ import annotations
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from .. import auth
 from ..network_speed import measure_upload_from_bytes, run_speedtest_json
 from ..obs.controller import OBSBusyError, OBSNotConnectedError, aio, controller
 from ..obs.stream_settings import StreamSettingsService
 
-router = APIRouter(prefix="/api/stream", tags=["stream"], dependencies=[Depends(auth.require_auth)])
+router = APIRouter(prefix="/api/stream", tags=["stream"], dependencies=[Depends(auth.require_admin)])
 
 
 def _svc() -> StreamSettingsService:

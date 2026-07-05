@@ -98,17 +98,42 @@ def _normalize_raw_stream(stream: dict) -> dict | None:
     sd = stream.get("streamData")
     if not isinstance(sd, dict):
         return stream
-    if sd.get("type") == "error":
+    if sd.get("type") == "error" or sd.get("error"):
         return None
-    if sd.get("url") or sd.get("infoHash") or sd.get("magnet"):
-        return {
+
+    torrent = sd.get("torrent") if isinstance(sd.get("torrent"), dict) else {}
+    url = (sd.get("url") or stream.get("url") or torrent.get("url") or "").strip()
+    info_hash = (
+        sd.get("infoHash") or stream.get("infoHash") or torrent.get("infoHash") or ""
+    ).strip()
+    magnet = (sd.get("magnet") or torrent.get("magnet") or "").strip()
+    if magnet and not url:
+        url = magnet
+
+    if url or info_hash or magnet:
+        merged: dict = {
             **sd,
+            "url": url,
             "name": stream.get("name") or sd.get("name", ""),
             "description": stream.get("description") or sd.get("description", ""),
             "behaviorHints": sd.get("behaviorHints") or stream.get("behaviorHints") or {},
-            # Keep parent reference for any extra keys some manifests attach at top level.
             "_aiostreams_parent": stream,
         }
+        if info_hash:
+            merged["infoHash"] = info_hash
+        if magnet:
+            merged["magnet"] = magnet
+        file_idx = sd.get("fileIdx")
+        if file_idx is None:
+            file_idx = stream.get("fileIdx")
+        if file_idx is None:
+            file_idx = torrent.get("fileIdx")
+        if file_idx is not None:
+            merged["fileIdx"] = file_idx
+        return merged
+
+    if stream.get("url") or stream.get("infoHash"):
+        return stream
     return stream
 
 
@@ -238,9 +263,9 @@ def _lang_meta_from_structured(structured: dict) -> dict | None:
 
     if dubbed is True:
         audio_lang = "dub"
-    elif any("dual audio" in _lang_key(l) or l.lower() == "dual" for l in languages):
+    elif any("dual audio" in _lang_key(l) or l.lower() == "dual" for l in languages):  # noqa: E741
         audio_lang = "dual"
-    elif any("multi" in _lang_key(l) for l in languages):
+    elif any("multi" in _lang_key(l) for l in languages):  # noqa: E741
         audio_lang = "dual"
     elif _langs_match(languages, _ENGLISH_LANG) and _langs_match(languages, _JAPANESE_LANG):
         audio_lang = "dual"
@@ -325,12 +350,12 @@ def _parse_resolution(text: str, binge_group: str = "") -> str:
         labels.append(m.group(1).lower().replace("4k", "2160p"))
     if not labels:
         return ""
-    has_sd_hd = any(l in labels for l in ("1080p", "720p", "480p", "1440p"))
+    has_sd_hd = any(l in labels for l in ("1080p", "720p", "480p", "1440p"))  # noqa: E741
     if has_sd_hd and "2160p" in labels:
         has_literal_4k = bool(re.search(r"\b(2160p|4k)\b", blob, re.I))
         if not has_literal_4k:
-            labels = [l for l in labels if l != "2160p"]
-    return max(labels, key=lambda l: _RES_RANK.get(l, 0))
+            labels = [l for l in labels if l != "2160p"]  # noqa: E741
+    return max(labels, key=lambda l: _RES_RANK.get(l, 0))  # noqa: E741
 
 
 def _parse_provider(name: str) -> str:
@@ -343,7 +368,6 @@ def _parse_provider(name: str) -> str:
 
 def _parse_language_meta(text: str) -> dict:
     """Infer dub/sub/dual and subtitle type from release name / filename."""
-    blob = text.lower()
     has_dub = bool(_DUB_RE.search(text)) or bool(_ENG_TAG_RE.search(text))
     has_dual = bool(_DUAL_RE.search(text))
     has_sub = bool(_SUB_RE.search(text))

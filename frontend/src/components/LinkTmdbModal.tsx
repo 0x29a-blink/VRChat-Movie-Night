@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { api } from "../api";
 import type { LibraryItem, SearchResult, TmdbEpisode } from "../types";
 import { libraryLinkLabel } from "./libraryWatchlist";
+import { useSeasonEpisodeState } from "../useSeasonEpisodeState";
 
 type LinkMode = "link" | "relink";
 
@@ -95,7 +96,6 @@ function PickLinkPanel({
   searching,
   doSearch,
   error,
-  setError,
   results,
   selected,
   pickTitle,
@@ -117,7 +117,6 @@ function PickLinkPanel({
   searching: boolean;
   doSearch: (e?: React.FormEvent) => void;
   error: string;
-  setError: (v: string) => void;
   results: SearchResult[];
   selected: SearchResult | null;
   setSelected: (v: SearchResult | null) => void;
@@ -322,11 +321,18 @@ export function LinkTmdbModal({
   const [error, setError] = useState("");
 
   const [selected, setSelected] = useState<SearchResult | null>(null);
-  const [seasons, setSeasons] = useState<{ season_number: number; name: string; episode_count: number }[]>([]);
-  const [season, setSeason] = useState<number | undefined>();
-  const [episodes, setEpisodes] = useState<TmdbEpisode[]>([]);
-  const [episode, setEpisode] = useState<number | undefined>();
-  const [loadingEpisodes, setLoadingEpisodes] = useState(false);
+  const {
+    seasons,
+    setSeasons,
+    season,
+    setSeason,
+    episode,
+    setEpisode,
+    episodes,
+    setEpisodes,
+    loadingEpisodes,
+    setLoadingEpisodes,
+  } = useSeasonEpisodeState();
   const [busy, setBusy] = useState(false);
 
   const [currentInfo, setCurrentInfo] = useState<CurrentLinkInfo | null>(null);
@@ -473,7 +479,6 @@ export function LinkTmdbModal({
     searching,
     doSearch,
     error,
-    setError,
     results,
     selected,
     setSelected,

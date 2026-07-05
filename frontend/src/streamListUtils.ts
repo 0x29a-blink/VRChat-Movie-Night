@@ -37,7 +37,7 @@ function streamSearchHaystack(s: StreamResult): string {
     .toLowerCase();
 }
 
-export function streamMatchesSearch(s: StreamResult, query: string): boolean {
+function streamMatchesSearch(s: StreamResult, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   const hay = streamSearchHaystack(s);
@@ -57,6 +57,14 @@ export function filterAndSortStreams(streams: StreamResult[], filters: StreamFil
     out = out.filter((s) => s.size_gb > 0 && s.size_gb <= Number(filters.maxSize));
   }
   if (filters.cachedOnly) out = out.filter((s) => s.cached);
+  if (filters.indexer) {
+    const want = filters.indexer.toLowerCase();
+    out = out.filter((s) => (s.indexer || "").toLowerCase() === want);
+  }
+  if (filters.releaseGroup) {
+    const want = filters.releaseGroup.toLowerCase();
+    out = out.filter((s) => (s.release_group || "").toLowerCase() === want);
+  }
   if (filters.minSeeders) {
     const min = Number(filters.minSeeders);
     if (min > 0) out = out.filter((s) => s.cached || s.seeders >= min);

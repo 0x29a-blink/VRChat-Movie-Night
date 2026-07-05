@@ -5,7 +5,6 @@ from app.models import (
     UserRating,
     UserWatchStatus,
     WatchlistComment,
-    WatchlistGroup,
     WatchlistItem,
     WatchlistItemUserExclusion,
 )

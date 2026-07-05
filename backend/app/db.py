@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from .config import settings
@@ -11,6 +11,16 @@ engine = create_engine(
     f"sqlite:///{DB_PATH}",
     connect_args={"check_same_thread": False},
 )
+
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragmas(dbapi_conn, _record):
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA busy_timeout = 5000")
+    cur.execute("PRAGMA journal_mode = WAL")
+    cur.execute("PRAGMA synchronous = NORMAL")
+    cur.close()
+
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
@@ -58,6 +68,11 @@ def _migrate_schema() -> None:
     if insp.has_table("jobs"):
         job_cols = {c["name"] for c in insp.get_columns("jobs")}
         job_migrations = [
+            ("restart_source", "TEXT DEFAULT ''"),
+            ("download_mode", "VARCHAR DEFAULT 'normal'"),
+            ("cache_file_idx", "INTEGER"),
+            ("cache_filename_hint", "VARCHAR DEFAULT ''"),
+            ("cache_size_bytes", "INTEGER DEFAULT 0"),
             ("link_tmdb_id", "INTEGER"),
             ("link_media_type", "VARCHAR DEFAULT ''"),
             ("link_season", "INTEGER"),
@@ -65,6 +80,8 @@ def _migrate_schema() -> None:
             ("link_watchlist_id", "INTEGER"),
             ("link_stremio_id", "VARCHAR DEFAULT ''"),
             ("link_series_title", "VARCHAR DEFAULT ''"),
+            ("link_status", "VARCHAR DEFAULT ''"),
+            ("link_error", "TEXT DEFAULT ''"),
         ]
         with engine.begin() as conn:
             for name, col_type in job_migrations:
@@ -74,6 +91,8 @@ def _migrate_schema() -> None:
     if insp.has_table("users"):
         user_cols = {c["name"] for c in insp.get_columns("users")}
         with engine.begin() as conn:
+            if "session_version" not in user_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN session_version INTEGER DEFAULT 0"))
             if "watchlist_stats_excluded" not in user_cols:
                 conn.execute(
                     text("ALTER TABLE users ADD COLUMN watchlist_stats_excluded BOOLEAN DEFAULT 0")
@@ -85,11 +104,50 @@ def _migrate_schema() -> None:
                     text("ALTER TABLE users ADD COLUMN allow_local_download BOOLEAN DEFAULT 0")
                 )
 
+    if insp.has_table("watchlist_groups"):
+        group_cols = {c["name"] for c in insp.get_columns("watchlist_groups")}
+        with engine.begin() as conn:
+            if "wheel_enabled" not in group_cols:
+                conn.execute(
+                    text("ALTER TABLE watchlist_groups ADD COLUMN wheel_enabled BOOLEAN DEFAULT 1")
+                )
+
+    if insp.has_table("watchlist_items"):
+        item_cols = {c["name"] for c in insp.get_columns("watchlist_items")}
+        item_migrations = [
+            ("group_id", "INTEGER"),
+            ("parent_id", "INTEGER"),
+            ("kind", "VARCHAR DEFAULT 'movie'"),
+            ("tmdb_id", "INTEGER"),
+            ("media_type", "VARCHAR DEFAULT 'movie'"),
+            ("season", "INTEGER"),
+            ("episode", "INTEGER"),
+            ("title", "VARCHAR DEFAULT ''"),
+            ("poster", "VARCHAR DEFAULT ''"),
+            ("year", "VARCHAR DEFAULT ''"),
+            ("library_item_id", "INTEGER"),
+            ("list_section", "VARCHAR DEFAULT 'to_watch'"),
+            ("sort_order", "INTEGER DEFAULT 0"),
+            ("created_at", "DATETIME"),
+        ]
+        with engine.begin() as conn:
+            for name, col_type in item_migrations:
+                if name not in item_cols:
+                    conn.execute(text(f"ALTER TABLE watchlist_items ADD COLUMN {name} {col_type}"))
+
     if insp.has_table("user_ratings"):
         rating_cols = {c["name"] for c in insp.get_columns("user_ratings")}
         with engine.begin() as conn:
             if "rated_at" not in rating_cols:
                 conn.execute(text("ALTER TABLE user_ratings ADD COLUMN rated_at DATETIME"))
+
+    if insp.has_table("queue_items"):
+        queue_cols = {c["name"] for c in insp.get_columns("queue_items")}
+        with engine.begin() as conn:
+            if "queued_by_user_id" not in queue_cols:
+                conn.execute(text("ALTER TABLE queue_items ADD COLUMN queued_by_user_id INTEGER"))
+            if "queued_by" not in queue_cols:
+                conn.execute(text("ALTER TABLE queue_items ADD COLUMN queued_by VARCHAR DEFAULT ''"))
 
 
 def init_db() -> None:

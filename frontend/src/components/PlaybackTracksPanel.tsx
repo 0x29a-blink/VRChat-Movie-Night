@@ -4,6 +4,205 @@ import { api } from "../api";
 import type { LibraryTracksResponse } from "../types";
 import { useToast } from "./Toast";
 
+type TrackIndex = number | "";
+
+function TrackSummary({
+  audioCount,
+  subCount,
+  probeError,
+}: {
+  audioCount: number;
+  subCount: number;
+  probeError?: string;
+}) {
+  return (
+    <p className="text-[10px] text-slate-500">
+      In file: {audioCount} audio, {subCount} subtitle{subCount === 1 ? "" : "s"}
+      {probeError ? <span className="block text-amber-400/90">Probe: {probeError}</span> : null}
+    </p>
+  );
+}
+
+function MissingTracksHint({
+  audioCount,
+  subCount,
+  probeError,
+}: {
+  audioCount: number;
+  subCount: number;
+  probeError?: string;
+}) {
+  if (audioCount > 1 || subCount > 0 || probeError) return null;
+
+  return (
+    <p className="text-xs text-slate-500">
+      Stream results often list release audio (dual, multi-sub), but your downloaded file only has what yt-dlp
+      merged. Enable <strong className="font-medium text-slate-400">Keep all torrent tracks</strong> in Settings,
+      then re-download this episode.
+    </p>
+  );
+}
+
+function AudioTrackSelect({
+  tracks,
+  audioIdx,
+  audioCount,
+  disabled,
+  onChange,
+}: {
+  tracks: LibraryTracksResponse;
+  audioIdx: TrackIndex;
+  audioCount: number;
+  disabled: boolean;
+  onChange: (value: TrackIndex) => void;
+}) {
+  return (
+    <label className="block text-xs text-slate-400">
+      Audio track
+      <select
+        className="input mt-1"
+        value={audioIdx === "" ? "" : String(audioIdx)}
+        disabled={disabled || audioCount === 0}
+        onChange={(e) => onChange(e.target.value === "" ? "" : Number(e.target.value))}
+      >
+        {audioCount === 0 ? (
+          <option value="">None detected</option>
+        ) : (
+          tracks.audio.map((a) => (
+            <option key={a.index} value={a.audio_index ?? 0}>
+              {a.label}
+            </option>
+          ))
+        )}
+      </select>
+    </label>
+  );
+}
+
+function SubtitleTrackSelect({
+  tracks,
+  subIdx,
+  subCount,
+  disabled,
+  onChange,
+}: {
+  tracks: LibraryTracksResponse;
+  subIdx: TrackIndex;
+  subCount: number;
+  disabled: boolean;
+  onChange: (value: TrackIndex) => void;
+}) {
+  return (
+    <label className="block text-xs text-slate-400">
+      Subtitles
+      <select
+        className="input mt-1"
+        value={subIdx === "" ? "" : String(subIdx)}
+        disabled={disabled || subCount === 0}
+        onChange={(e) => onChange(e.target.value === "" ? "" : Number(e.target.value))}
+      >
+        <option value="">Off</option>
+        {tracks.subtitles.map((s) => (
+          <option key={s.index} value={s.subtitle_index ?? 0}>
+            {s.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function BurnSubtitlesToggle({
+  subIdx,
+  subCount,
+  checked,
+  disabled,
+  onChange,
+}: {
+  subIdx: TrackIndex;
+  subCount: number;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  if (subIdx === "" || subCount === 0) return null;
+
+  return (
+    <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-300">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        disabled={disabled}
+        className="h-4 w-4 rounded accent-brand-500"
+      />
+      Burn subtitles into video (VRChat)
+    </label>
+  );
+}
+
+function savingLabel(isNowPlaying: boolean, burningOnSave: boolean): string {
+  if (!isNowPlaying) return "Saving…";
+  return burningOnSave ? "Remuxing subtitles…" : "Applying…";
+}
+
+function saveLabel(isNowPlaying: boolean, burningOnSave: boolean): string {
+  if (!isNowPlaying) return "Save track settings";
+  return burningOnSave ? "Apply tracks & remux subs" : "Apply tracks & restart playback";
+}
+
+function SaveTracksButton({
+  applying,
+  isNowPlaying,
+  burningOnSave,
+  compact,
+  disabled,
+  onSave,
+}: {
+  applying: boolean;
+  isNowPlaying: boolean;
+  burningOnSave: boolean;
+  compact: boolean;
+  disabled: boolean;
+  onSave: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSave}
+      disabled={disabled}
+      className={`btn-primary w-full ${compact ? "text-xs !py-1.5" : "text-xs"}`}
+    >
+      {applying ? (
+        <span className="inline-flex items-center justify-center gap-2">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          {savingLabel(isNowPlaying, burningOnSave)}
+        </span>
+      ) : (
+        saveLabel(isNowPlaying, burningOnSave)
+      )}
+    </button>
+  );
+}
+
+function ApplyingHint({
+  applying,
+  isNowPlaying,
+  burningOnSave,
+}: {
+  applying: boolean;
+  isNowPlaying: boolean;
+  burningOnSave: boolean;
+}) {
+  if (!applying || !isNowPlaying || !burningOnSave) return null;
+
+  return (
+    <p className="text-[10px] leading-snug text-amber-300/90">
+      Burning subtitles re-encodes the video — large files can take several minutes. Please wait.
+    </p>
+  );
+}
+
 export function PlaybackTracksPanel({
   libraryId,
   libraryPath,
@@ -129,97 +328,38 @@ export function PlaybackTracksPanel({
         </div>
       ) : tracks ? (
         <>
-          <p className="text-[10px] text-slate-500">
-            In file: {audioCount} audio, {subCount} subtitle{subCount === 1 ? "" : "s"}
-            {probeError ? (
-              <span className="block text-amber-400/90">Probe: {probeError}</span>
-            ) : null}
-          </p>
-
-          {audioCount <= 1 && subCount === 0 && !probeError && (
-            <p className="text-xs text-slate-500">
-              Stream results often list release audio (dual, multi-sub), but your downloaded file only has
-              what yt-dlp merged. Enable <strong className="font-medium text-slate-400">Keep all torrent tracks</strong>{" "}
-              in Settings, then re-download this episode.
-            </p>
-          )}
-
-          <label className="block text-xs text-slate-400">
-            Audio track
-            <select
-              className="input mt-1"
-              value={audioIdx === "" ? "" : String(audioIdx)}
-              disabled={controlsDisabled || audioCount === 0}
-              onChange={(e) => setAudioIdx(e.target.value === "" ? "" : Number(e.target.value))}
-            >
-              {audioCount === 0 ? (
-                <option value="">None detected</option>
-              ) : (
-                tracks.audio.map((a) => (
-                  <option key={a.index} value={a.audio_index ?? 0}>
-                    {a.label}
-                  </option>
-                ))
-              )}
-            </select>
-          </label>
-
-          <label className="block text-xs text-slate-400">
-            Subtitles
-            <select
-              className="input mt-1"
-              value={subIdx === "" ? "" : String(subIdx)}
-              disabled={controlsDisabled || subCount === 0}
-              onChange={(e) => setSubIdx(e.target.value === "" ? "" : Number(e.target.value))}
-            >
-              <option value="">Off</option>
-              {tracks.subtitles.map((s) => (
-                <option key={s.index} value={s.subtitle_index ?? 0}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {subIdx !== "" && subCount > 0 && (
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-300">
-              <input
-                type="checkbox"
-                checked={burnSubs}
-                onChange={(e) => setBurnSubs(e.target.checked)}
-                disabled={controlsDisabled}
-                className="h-4 w-4 rounded accent-brand-500"
-              />
-              Burn subtitles into video (VRChat)
-            </label>
-          )}
-
-          <button
-            type="button"
-            onClick={save}
+          <TrackSummary audioCount={audioCount} subCount={subCount} probeError={probeError} />
+          <MissingTracksHint audioCount={audioCount} subCount={subCount} probeError={probeError} />
+          <AudioTrackSelect
+            tracks={tracks}
+            audioIdx={audioIdx}
+            audioCount={audioCount}
+            disabled={controlsDisabled}
+            onChange={setAudioIdx}
+          />
+          <SubtitleTrackSelect
+            tracks={tracks}
+            subIdx={subIdx}
+            subCount={subCount}
+            disabled={controlsDisabled}
+            onChange={setSubIdx}
+          />
+          <BurnSubtitlesToggle
+            subIdx={subIdx}
+            subCount={subCount}
+            checked={burnSubs}
+            disabled={controlsDisabled}
+            onChange={setBurnSubs}
+          />
+          <SaveTracksButton
+            applying={applying}
+            isNowPlaying={isNowPlaying}
+            burningOnSave={burningOnSave}
+            compact={compact}
             disabled={saveDisabled || audioCount === 0}
-            className={`btn-primary w-full ${compact ? "text-xs !py-1.5" : "text-xs"}`}
-          >
-            {applying ? (
-              <span className="inline-flex items-center justify-center gap-2">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                {isNowPlaying && burningOnSave
-                  ? "Remuxing subtitles…"
-                  : isNowPlaying
-                    ? "Applying…"
-                    : "Saving…"}
-              </span>
-            ) : isNowPlaying ? (
-              burningOnSave ? "Apply tracks & remux subs" : "Apply tracks & restart playback"
-            ) : (
-              "Save track settings"
-            )}
-          </button>
-          {applying && isNowPlaying && burningOnSave && (
-            <p className="text-[10px] leading-snug text-amber-300/90">
-              Burning subtitles re-encodes the video — large files can take several minutes. Please wait.
-            </p>
-          )}
+            onSave={save}
+          />
+          <ApplyingHint applying={applying} isNowPlaying={isNowPlaying} burningOnSave={burningOnSave} />
         </>
       ) : (
         <p className="text-xs text-slate-500">Could not load tracks for this file.</p>

@@ -4,9 +4,10 @@ from .. import auth, settings_store
 from ..downloads.manager import manager as download_manager
 from ..obs.controller import aio, controller
 from ..obs.setup import apply_obs_recommendations, audit_obs
+from ..provider_checks import check_aiostreams, check_tmdb, check_torbox
 
 router = APIRouter(prefix="/api/settings", tags=["settings"],
-                   dependencies=[Depends(auth.require_auth)])
+                   dependencies=[Depends(auth.require_admin)])
 
 
 @router.get("")
@@ -19,7 +20,9 @@ def update_settings(values: dict):
     settings_store.update(values)
     # apply concurrency immediately + force OBS reconnect on next call
     if "max_concurrent_downloads" in values:
-        download_manager.start()
+        download_manager.set_concurrency_limit(
+            int(settings_store.get("max_concurrent_downloads", 1) or 1)
+        )
     controller._reset()  # noqa: SLF001 - intentional internal reset
     return settings_store.public()
 
@@ -61,3 +64,18 @@ async def obs_apply():
     """Apply Movie Night stream + media source defaults where possible."""
     controller._reset()  # noqa: SLF001
     return await aio(apply_obs_recommendations, controller)
+
+
+@router.post("/test-tmdb")
+async def test_tmdb():
+    return await check_tmdb(settings_store.get("tmdb_api_key", ""))
+
+
+@router.post("/test-torbox")
+async def test_torbox():
+    return await check_torbox(settings_store.get("torbox_api_key", ""))
+
+
+@router.post("/test-aiostreams")
+async def test_aiostreams():
+    return await check_aiostreams(settings_store.get_aiostreams_effective())

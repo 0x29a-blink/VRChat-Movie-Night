@@ -7,19 +7,18 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-
-from ..http_errors import format_api_detail
-from ..search import aiostreams
-from ..search.aiostreams_auth import prepare_aiostreams_request_url
-from ..search.ids import parse_torbox_catalog_ids
-from ..search.parse import parse_stream
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import auth
 from ..db import SessionLocal, get_db
+from ..http_errors import format_api_detail
 from ..models import LibraryItem
 from ..permissions import may_local_download
+from ..search import aiostreams
+from ..search.aiostreams_auth import prepare_aiostreams_request_url
+from ..search.ids import parse_torbox_catalog_ids
+from ..search.parse import parse_stream
 from ..settings_store import get as setting_get
 from ..torbox.client import (
     TorboxClient,
