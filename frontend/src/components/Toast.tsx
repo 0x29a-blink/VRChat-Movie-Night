@@ -43,7 +43,13 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     <ToastContext.Provider value={value}>
       {children}
       {createPortal(
-        <div className="pointer-events-none fixed bottom-4 right-4 z-[200] flex max-w-sm flex-col gap-2">
+        <div className="pointer-events-none fixed bottom-20 right-4 z-[200] flex max-w-sm flex-col gap-2">
+          {/* bottom-20 (not bottom-4): static offset that clears the h-14
+              SessionStrip (plan 025) on non-Tonight tabs. Toasts already
+              render above the strip in z-order (200 > 40); this offset
+              also keeps them visually clear of the strip when it's
+              visible, at the cost of a little extra bottom margin on
+              Tonight where the strip never shows. */}
           {toasts.map((t) => (
             <div
               key={t.id}

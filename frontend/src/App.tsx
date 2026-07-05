@@ -18,8 +18,10 @@ import { useAppRealtime } from "./appRealtime";
 import { readNavFromLocation, writeNavToLocation, type AppTab, type WatchlistSection } from "./appNav";
 import { Login } from "./components/Login";
 import { PlaybackProvider } from "./components/PlaybackContext";
+import { SessionStrip } from "./components/SessionStrip";
 import { TabSkeleton } from "./components/TabSkeleton";
 import { ToastProvider, useToast } from "./components/Toast";
+import { stripVisible } from "./stripVisibility";
 import { WatchlistAddProvider } from "./watchlistAddModal";
 import { fmtMs } from "./format";
 import type { AppEvent, Job, MovieNightSession, PlayerState, PreflightStatus, QueueSnapshot, UserInfo } from "./types";
@@ -222,6 +224,7 @@ function AppShell() {
   const nowTitle = queue.current?.title;
   const nowCursor = player?.cursor ?? 0;
   const showGoLiveWarning = (playing || paused) && obs.connected && !obs.streaming;
+  const showSessionStrip = stripVisible(tab, session, player, activeDownloads);
 
   return (
     <PlaybackProvider obs={obs} onGoToQueue={goToQueue}>
@@ -257,7 +260,7 @@ function AppShell() {
           <MobileHeader tab={tab} onOpenNav={() => setNavOpen(true)} />
           <PlaybackNotice paused={paused} showGoLiveWarning={showGoLiveWarning} />
 
-          <div className="flex-1 overflow-y-auto">
+          <div className={`flex-1 overflow-y-auto ${showSessionStrip ? "pb-16" : ""}`}>
             <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
               <Suspense fallback={<TabSkeleton tab={tab} />}>
                 <MainPanels
@@ -297,6 +300,15 @@ function AppShell() {
           </div>
         </main>
       </div>
+
+      <SessionStrip
+        tab={tab}
+        session={session}
+        player={player}
+        activeDownloads={activeDownloads}
+        user={user}
+        onNavigate={navigateTab}
+      />
     </PlaybackProvider>
   );
 }
