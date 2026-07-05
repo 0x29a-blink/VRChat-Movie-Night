@@ -106,15 +106,15 @@ describe("writeNavToLocation + readNavFromLocation round-trip", () => {
 });
 
 describe("appNav addSource (plan 026 Add Media flatten)", () => {
-  it("deep-links ?tab=add&sub=anime", () => {
-    window.history.replaceState({}, "", "/?tab=add&sub=anime");
+  it("deep-links ?tab=add&sub=catalogs", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=catalogs");
     const nav = readNavFromLocation();
     expect(nav.tab).toBe("add");
-    expect(nav.addSource).toBe("anime");
+    expect(nav.addSource).toBe("catalogs");
   });
 
   it("parses every valid addSource value", () => {
-    for (const sub of ["search", "browse", "anime", "youtube", "m3u8"] as const) {
+    for (const sub of ["search", "catalogs", "collections", "youtube", "m3u8"] as const) {
       window.history.replaceState({}, "", `/?tab=add&sub=${sub}`);
       expect(readNavFromLocation().addSource).toBe(sub);
     }
@@ -126,12 +126,12 @@ describe("appNav addSource (plan 026 Add Media flatten)", () => {
   });
 
   it("ignores sub when the tab isn't add", () => {
-    window.history.replaceState({}, "", "/?tab=library&sub=anime");
+    window.history.replaceState({}, "", "/?tab=library&sub=catalogs");
     const nav = readNavFromLocation();
     expect(nav.tab).toBe("library");
     // sub is still parsed regardless of tab (mirrors group/section parsing),
     // but writeNavToLocation only persists it for the add tab.
-    expect(nav.addSource).toBe("anime");
+    expect(nav.addSource).toBe("catalogs");
   });
 
   it("round-trips addSource through writeNavToLocation", () => {
@@ -143,15 +143,27 @@ describe("appNav addSource (plan 026 Add Media flatten)", () => {
   });
 
   it("drops sub from the URL when writing a non-add tab", () => {
-    window.history.replaceState({}, "", "/?tab=add&sub=anime");
+    window.history.replaceState({}, "", "/?tab=add&sub=catalogs");
     writeNavToLocation({ tab: "library" });
     expect(window.location.search).not.toContain("sub");
     expect(readNavFromLocation().addSource).toBeUndefined();
   });
 
   it("drops sub from the URL when writing the add tab without an addSource", () => {
-    window.history.replaceState({}, "", "/?tab=add&sub=anime");
+    window.history.replaceState({}, "", "/?tab=add&sub=catalogs");
     writeNavToLocation({ tab: "add" });
     expect(window.location.search).not.toContain("sub");
+  });
+});
+
+describe("appNav legacy addSource aliases (plan 031 honest taxonomy)", () => {
+  it("maps legacy ?sub=browse to collections", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=browse");
+    expect(readNavFromLocation().addSource).toBe("collections");
+  });
+
+  it("maps legacy ?sub=anime to catalogs", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=anime");
+    expect(readNavFromLocation().addSource).toBe("catalogs");
   });
 });

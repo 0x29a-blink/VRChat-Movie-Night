@@ -410,18 +410,16 @@ export function Browse({
   onPickTitle,
   allowLocalDownload = false,
   initialSource = "collections",
-  autoOpenAnime = false,
   hideSourceToggle = false,
 }: {
   onPickTitle: (r: SearchResult) => void;
   allowLocalDownload?: boolean;
   // Plan 026 (Add Media flatten): let the coordinator (Downloads.tsx) land
-  // directly on a source, e.g. Anime, without the user re-clicking here.
+  // directly on a source, e.g. Catalogs, without the user re-clicking here.
   initialSource?: BrowseSource;
-  autoOpenAnime?: boolean;
   // Plan 030 (fix A): when the top-level segment already pins the source
-  // (Downloads.tsx's Browse/Anime segments), hide this internal switcher so
-  // it can't desync from the URL/segment.
+  // (Downloads.tsx's Catalogs/Collections segments), hide this internal
+  // switcher so it can't desync from the URL/segment.
   hideSourceToggle?: boolean;
 }) {
   const { push: pushToast } = useToast();
@@ -545,11 +543,6 @@ export function Browse({
     setCatalogFilter("anime");
     if (animeCatalogKey) setSelectedCatalogKey(animeCatalogKey);
   };
-
-  useEffect(() => {
-    if (autoOpenAnime) openAnimeBrowse();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoOpenAnime]);
 
   useEffect(() => {
     if (source === "aiostreams") loadCatalogs();
@@ -828,6 +821,30 @@ export function Browse({
 
           {!activeAioCollection && catalogs.length > 0 && (
             <>
+              {animeCatalogKey && (
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={openAnimeBrowse}
+                    className={`chip ${
+                      catalogFilter === "anime"
+                        ? "bg-violet-500/25 text-violet-200"
+                        : "bg-white/5 text-slate-300 hover:bg-violet-500/20 hover:text-violet-200"
+                    }`}
+                  >
+                    Anime
+                  </button>
+                  {catalogFilter && (
+                    <button
+                      type="button"
+                      onClick={() => setCatalogFilter("")}
+                      className="chip bg-white/5 text-slate-300 hover:bg-white/10"
+                    >
+                      Clear filter
+                    </button>
+                  )}
+                </div>
+              )}
               <CatalogPicker
                 catalogs={catalogs}
                 selectedKey={selectedCatalogKey || (catalogs[0] ? catalogKey(catalogs[0]) : "")}

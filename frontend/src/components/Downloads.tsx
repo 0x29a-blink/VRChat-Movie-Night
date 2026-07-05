@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, LayoutGrid, Link2, Loader2, Search as SearchIcon, Sparkles, Youtube } from "lucide-react";
+import { ChevronDown, ChevronRight, LayoutGrid, Layers, Link2, Loader2, Search as SearchIcon, Youtube } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { Job, UserInfo } from "../types";
@@ -15,8 +15,8 @@ import { Search } from "./Search";
 // routes to the right child, keeping Search.tsx/Browse.tsx internals intact.
 const SOURCES: { id: AddSource; label: string; icon: typeof Youtube }[] = [
   { id: "search", label: "Search", icon: SearchIcon },
-  { id: "browse", label: "Browse", icon: LayoutGrid },
-  { id: "anime", label: "Anime", icon: Sparkles },
+  { id: "catalogs", label: "Catalogs", icon: LayoutGrid },
+  { id: "collections", label: "Collections", icon: Layers },
   { id: "youtube", label: "YouTube / URL", icon: Youtube },
   { id: "m3u8", label: "M3U8", icon: Link2 },
 ];
@@ -39,7 +39,7 @@ export function Downloads({
   user: UserInfo;
 }) {
   const [source, setSource] = useState<AddSource>(
-    () => (initialStreamLaunch ? "search" : readNavFromLocation().addSource ?? "youtube")
+    () => (initialStreamLaunch ? "search" : readNavFromLocation().addSource ?? "search")
   );
   const [historyOpen, setHistoryOpen] = useState(false);
   const [clearing, setClearing] = useState<"completed" | "failed" | null>(null);
@@ -112,22 +112,21 @@ export function Downloads({
               allowLocalDownload={canLocalDownload(user)}
             />
           )}
-          {source === "browse" && (
+          {source === "catalogs" && (
             <Search
-              key="browse"
-              initialMode="browse"
-              hideSourceToggle
-              browseSource="collections"
-              allowLocalDownload={canLocalDownload(user)}
-            />
-          )}
-          {source === "anime" && (
-            <Search
-              key="anime"
+              key="catalogs"
               initialMode="browse"
               hideSourceToggle
               browseSource="aiostreams"
-              autoOpenAnime
+              allowLocalDownload={canLocalDownload(user)}
+            />
+          )}
+          {source === "collections" && (
+            <Search
+              key="collections"
+              initialMode="browse"
+              hideSourceToggle
+              browseSource="collections"
               allowLocalDownload={canLocalDownload(user)}
             />
           )}

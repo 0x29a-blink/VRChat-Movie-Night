@@ -36,8 +36,13 @@ export type WatchlistSection = "to_watch" | "watched";
 // AddSource backs the "Add Media" flattened source picker (plan 026):
 // a single segmented control replacing the old 4-level nesting
 // (tab -> Downloads TABS -> Search mode -> Browse source). Lives in the
-// URL as `sub` so `?tab=add&sub=anime` is a 1-click deep link.
-export type AddSource = "search" | "browse" | "anime" | "youtube" | "m3u8";
+// URL as `sub` so `?tab=add&sub=catalogs` is a 1-click deep link.
+//
+// Plan 031 (honest taxonomy): "browse" was actually TMDB collections and
+// "anime" was actually the general AIOStreams catalog browser (pre-filtered
+// to one catalog) — renamed to what they really are. Legacy `?sub=` values
+// are mapped in parseAddSource below so old deep links keep resolving.
+export type AddSource = "search" | "catalogs" | "collections" | "youtube" | "m3u8";
 
 export type NavState = {
   tab: AppTab;
@@ -51,10 +56,19 @@ function parseWatchlistSection(value: string | null): WatchlistSection | undefin
   return undefined;
 }
 
-const VALID_ADD_SOURCES = new Set<AddSource>(["search", "browse", "anime", "youtube", "m3u8"]);
+const VALID_ADD_SOURCES = new Set<AddSource>(["search", "catalogs", "collections", "youtube", "m3u8"]);
+
+// Legacy `?sub=` values from before plan 031's rename, mapped to their
+// honest equivalents so old deep links/bookmarks still resolve.
+const LEGACY_ADD_SOURCE_ALIASES: Record<string, AddSource> = {
+  browse: "collections",
+  anime: "catalogs",
+};
 
 function parseAddSource(value: string | null): AddSource | undefined {
-  if (value && VALID_ADD_SOURCES.has(value as AddSource)) return value as AddSource;
+  if (!value) return undefined;
+  if (LEGACY_ADD_SOURCE_ALIASES[value]) return LEGACY_ADD_SOURCE_ALIASES[value];
+  if (VALID_ADD_SOURCES.has(value as AddSource)) return value as AddSource;
   return undefined;
 }
 
