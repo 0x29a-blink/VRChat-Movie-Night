@@ -16,6 +16,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   ChevronDown,
   ChevronRight,
+  Download,
   GripVertical,
   Link2,
   ListPlus,
@@ -24,6 +25,7 @@ import {
   Play,
   Plus,
   RotateCw,
+  SlidersHorizontal,
   Star,
   Search,
   Trash2,
@@ -36,6 +38,7 @@ import { api } from "../api";
 import type { TmdbEpisode, UserInfo, WatchlistGroup, WatchlistItem, WatchlistUserWatch } from "../types";
 import { streamTargetFromWatchlistItem, type StreamTarget } from "./streamTarget";
 import { InLibraryChip } from "./InLibraryChip";
+import { KebabMenu, type KebabMenuItem } from "./KebabMenu";
 import { TitleMediaActions } from "./TitleMediaActions";
 import { canLocalDownload } from "../localDownload";
 import { TitleStreamsModal } from "./TitleStreamsModal";
@@ -269,12 +272,25 @@ function UserWatchBadges({
 function StatsExclusionMenu({
   item,
   onUpdate,
+  hideTrigger = false,
+  open: openProp,
+  onOpenChange,
+  anchorRef: externalAnchorRef,
 }: {
   item: WatchlistItem;
   onUpdate: (item: WatchlistItem) => void;
+  /** Hide the built-in "⋯" trigger; an external control (e.g. a kebab menu item) drives `open`/`onOpenChange` instead. */
+  hideTrigger?: boolean;
+  open?: boolean;
+  onOpenChange?: (next: boolean) => void;
+  /** Required when `hideTrigger` is set — element the popover positions itself against. */
+  anchorRef?: React.RefObject<HTMLElement | null>;
 }) {
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = useState(false);
+  const ownButtonRef = useRef<HTMLButtonElement>(null);
+  const buttonRef = externalAnchorRef ?? ownButtonRef;
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = openProp ?? uncontrolledOpen;
+  const setOpen = onOpenChange ?? setUncontrolledOpen;
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [users, setUsers] = useState<
     { user_id: number; username: string; globally_excluded: boolean; excluded_on_item: boolean }[]
@@ -298,7 +314,8 @@ function StatsExclusionMenu({
     if (!open || !buttonRef.current) return;
 
     const updatePosition = () => {
-      const rect = buttonRef.current!.getBoundingClientRect();
+      if (!buttonRef.current) return;
+      const rect = buttonRef.current.getBoundingClientRect();
       const panelWidth = 288;
       const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8));
       setMenuPos({ top: rect.bottom + 6, left });
@@ -311,7 +328,7 @@ function StatsExclusionMenu({
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
-  }, [open]);
+  }, [open, buttonRef]);
 
   const toggle = async (userId: number, excluded: boolean) => {
     setBusyId(userId);
@@ -326,16 +343,18 @@ function StatsExclusionMenu({
 
   return (
     <>
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        onPointerDown={stopDrag}
-        className="btn-ghost shrink-0 px-1 py-0.5 text-slate-400"
-        title="Hide users from group stats on this title"
-      >
-        <UserMinus className="h-3 w-3" />
-      </button>
+      {!hideTrigger && (
+        <button
+          ref={ownButtonRef}
+          type="button"
+          onClick={() => setOpen(!open)}
+          onPointerDown={stopDrag}
+          className="btn-ghost shrink-0 px-1 py-0.5 text-slate-400"
+          title="Hide users from group stats on this title"
+        >
+          <UserMinus className="h-3 w-3" />
+        </button>
+      )}
       {open &&
         menuPos &&
         createPortal(
@@ -464,8 +483,23 @@ function StarPicker({
   );
 }
 
-function ItemComments({ itemId, commentCount = 0 }: { itemId: number; commentCount?: number }) {
-  const [open, setOpen] = useState(false);
+function ItemComments({
+  itemId,
+  commentCount = 0,
+  hideTrigger = false,
+  open: openProp,
+  onOpenChange,
+}: {
+  itemId: number;
+  commentCount?: number;
+  /** Hide the built-in toggle button; an external control (e.g. a kebab menu item) drives `open`/`onOpenChange` instead. */
+  hideTrigger?: boolean;
+  open?: boolean;
+  onOpenChange?: (next: boolean) => void;
+}) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = openProp ?? uncontrolledOpen;
+  const setOpen = onOpenChange ?? setUncontrolledOpen;
   const [comments, setComments] = useState<{ id: number; body: string; username: string; created_at: string }[]>([]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -479,7 +513,7 @@ function ItemComments({ itemId, commentCount = 0 }: { itemId: number; commentCou
   };
 
   useEffect(() => {
-    setOpen(false);
+    setUncontrolledOpen(false);
   }, [itemId]);
 
   useEffect(() => {
@@ -496,9 +530,11 @@ function ItemComments({ itemId, commentCount = 0 }: { itemId: number; commentCou
 
   return (
     <div className={open ? "w-full basis-full" : "shrink-0"}>
-      <button type="button" onClick={() => setOpen(!open)} className="btn-ghost shrink-0 px-1 py-0.5 text-[11px]">
-        <MessageSquare className="h-3 w-3" /> Comments{commentCount > 0 ? ` (${commentCount})` : ""}
-      </button>
+      {!hideTrigger && (
+        <button type="button" onClick={() => setOpen(!open)} className="btn-ghost shrink-0 px-1 py-0.5 text-[11px]">
+          <MessageSquare className="h-3 w-3" /> Comments{commentCount > 0 ? ` (${commentCount})` : ""}
+        </button>
+      )}
       {open && (
         <div className="mt-2 space-y-2 rounded-lg bg-black/20 p-2">
           {loading ? (
@@ -1040,6 +1076,12 @@ function SortableRow({
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
+  const { playFromLibrary, queueFromLibrary } = usePlayback();
+  const [actionBusy, setActionBusy] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [groupMoveOpen, setGroupMoveOpen] = useState(false);
+  const [statsMenuOpen, setStatsMenuOpen] = useState(false);
+  const statsMenuAnchorRef = useRef<HTMLSpanElement>(null);
 
   const toggleWatched = async () => {
     const next = await api.watchlistSetWatched(item.id, !item.my_watched);
@@ -1056,6 +1098,69 @@ function SortableRow({
   const isContainer = item.kind === "series" || item.kind === "collection";
   const progressLabel = item.kind === "collection" ? "items" : "eps";
   const streamTarget = streamTargetFromWatchlistItem(item);
+  const canFindStreams = !!streamTarget && item.kind !== "episode" && item.kind !== "collection";
+
+  const playNow = async () => {
+    if (!item.library_match) return;
+    setActionBusy(true);
+    try {
+      await playFromLibrary(item.library_match);
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const addToQueue = async () => {
+    if (!item.library_match) return;
+    setActionBusy(true);
+    try {
+      await queueFromLibrary(item.library_match);
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  // Primary action: Play if the title is already in the library, else Streams
+  // (find something to play). Whichever isn't primary — plus Queue, Comments,
+  // group-move, stats-exclusion, and delete — collapses into the kebab.
+  const primaryIsPlay = !!item.library_match;
+
+  const kebabItems: KebabMenuItem[] = [];
+  if (item.library_match) {
+    kebabItems.push({ label: "Add to queue", icon: <ListPlus className="h-3.5 w-3.5" />, onClick: addToQueue });
+  }
+  if (primaryIsPlay && canFindStreams) {
+    kebabItems.push({
+      label: "Find streams",
+      icon: <Download className="h-3.5 w-3.5" />,
+      onClick: () => onFindStreams(streamTarget!),
+    });
+  }
+  kebabItems.push({
+    label: commentsOpen ? "Hide comments" : `Comments${item.comment_count ? ` (${item.comment_count})` : ""}`,
+    icon: <MessageSquare className="h-3.5 w-3.5" />,
+    onClick: () => setCommentsOpen((v) => !v),
+  });
+  if (item.kind !== "episode") {
+    kebabItems.push({
+      label: "Move to group…",
+      icon: <ListPlus className="h-3.5 w-3.5" />,
+      onClick: () => setGroupMoveOpen((v) => !v),
+    });
+  }
+  if (isAdmin && item.kind !== "episode") {
+    kebabItems.push({
+      label: "Group stats visibility…",
+      icon: <UserMinus className="h-3.5 w-3.5" />,
+      onClick: () => setStatsMenuOpen((v) => !v),
+    });
+  }
+  kebabItems.push({
+    label: "Remove from watchlist",
+    icon: <Trash2 className="h-3.5 w-3.5" />,
+    onClick: () => onRequestDelete(item),
+    destructive: true,
+  });
 
   return (
     <div ref={setNodeRef} style={style} className="card p-2.5 sm:p-3">
@@ -1121,40 +1226,68 @@ function SortableRow({
               {item.kind !== "episode" && (
                 <StarPicker value={item.my_rating} onChange={setRating} ratings={item.ratings ?? []} />
               )}
-              <TitleMediaActions
-                libraryMatch={item.library_match}
-                hideLibraryChip
-                onFindStreams={
-                  streamTarget && item.kind !== "episode" && item.kind !== "collection"
-                    ? () => onFindStreams(streamTarget)
-                    : undefined
-                }
-                onPointerDown={stopDrag}
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-              <ItemComments itemId={item.id} commentCount={item.comment_count} />
-              {isAdmin && item.kind !== "episode" && (
-                <StatsExclusionMenu item={item} onUpdate={onUpdate} />
+              {primaryIsPlay ? (
+                <button
+                  type="button"
+                  disabled={actionBusy}
+                  onClick={playNow}
+                  onPointerDown={stopDrag}
+                  className="btn-ghost shrink-0 px-1.5 py-0.5 text-xs border border-brand-500/30"
+                >
+                  {actionBusy ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Play className="h-3 w-3" />
+                  )}
+                  {" Play"}
+                </button>
+              ) : (
+                canFindStreams && (
+                  <button
+                    type="button"
+                    onClick={() => onFindStreams(streamTarget!)}
+                    onPointerDown={stopDrag}
+                    className="btn-ghost shrink-0 px-1.5 py-0.5 text-xs border border-white/10"
+                  >
+                    <Download className="h-3 w-3" /> Streams
+                  </button>
+                )
               )}
-              {item.kind !== "episode" && (
+              <span ref={statsMenuAnchorRef} className="inline-block h-0 w-0" aria-hidden />
+              <KebabMenu items={kebabItems} label={`More actions for ${item.title}`} />
+            </div>
+            {commentsOpen && (
+              <ItemComments
+                itemId={item.id}
+                commentCount={item.comment_count}
+                hideTrigger
+                open={commentsOpen}
+                onOpenChange={setCommentsOpen}
+              />
+            )}
+            {groupMoveOpen && item.kind !== "episode" && (
+              <div className="flex items-center gap-2 rounded-lg bg-black/20 p-2" onPointerDown={stopDrag}>
                 <GroupMoveSelect
                   item={item}
                   groups={groups}
                   onMoved={() => {
+                    setGroupMoveOpen(false);
                     onRemoveFromView(item.id);
                     onRefresh();
                   }}
                 />
-              )}
-              <button
-                type="button"
-                onClick={() => onRequestDelete(item)}
-                className="btn-ghost shrink-0 px-1 py-0.5 text-red-400"
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
-            </div>
+              </div>
+            )}
+            {isAdmin && item.kind !== "episode" && (
+              <StatsExclusionMenu
+                item={item}
+                onUpdate={onUpdate}
+                hideTrigger
+                open={statsMenuOpen}
+                onOpenChange={setStatsMenuOpen}
+                anchorRef={statsMenuAnchorRef}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -1293,6 +1426,8 @@ export function Watchlist({
   const [items, setItems] = useState<WatchlistItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupOpen, setNewGroupOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [deleteTarget, setDeleteTarget] = useState<WatchlistItem | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -1436,6 +1571,7 @@ export function Watchlist({
     try {
       await api.watchlistCreateGroup(newGroupName.trim());
       setNewGroupName("");
+      setNewGroupOpen(false);
       loadGroups();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not create group");
@@ -1447,6 +1583,7 @@ export function Watchlist({
     try {
       await api.watchlistCreateGroup(name);
       pushToast(`Created group "${name}"`, "success");
+      setNewGroupOpen(false);
       loadGroups();
     } catch (err: unknown) {
       pushToast(err instanceof Error ? err.message : "Could not create group", "error");
@@ -1629,37 +1766,50 @@ export function Watchlist({
             </button>
           ))}
           </div>
-          <div className="flex gap-1 pt-2">
-            <input
-              className="input flex-1 text-xs"
-              placeholder="New group…"
-              value={newGroupName}
-              onChange={(e) => setNewGroupName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && createGroup()}
-            />
-            <button type="button" onClick={createGroup} className="btn-primary px-2">
-              <Plus className="h-4 w-4" />
-            </button>
-          </div>
-          <select
-            className="input mt-1 text-xs"
-            value=""
-            onChange={(e) => {
-              const name = e.target.value;
-              e.target.value = "";
-              createGroupFromTemplate(name);
-            }}
+          <button
+            type="button"
+            onClick={() => setNewGroupOpen((v) => !v)}
+            className="mt-2 flex w-full items-center gap-1 text-xs text-slate-400 hover:text-white"
           >
-            <option value="">From template…</option>
-            {GROUP_TEMPLATES.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
+            {newGroupOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            + New group
+          </button>
+          {newGroupOpen && (
+            <div className="mt-1 space-y-1">
+              <div className="flex gap-1">
+                <input
+                  className="input flex-1 text-xs"
+                  placeholder="New group…"
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && createGroup()}
+                  autoFocus
+                />
+                <button type="button" onClick={createGroup} className="btn-primary px-2">
+                  <Plus className="h-4 w-4" />
+                </button>
+              </div>
+              <select
+                className="input text-xs"
+                value=""
+                onChange={(e) => {
+                  const name = e.target.value;
+                  e.target.value = "";
+                  createGroupFromTemplate(name);
+                }}
+              >
+                <option value="">From template…</option>
+                {GROUP_TEMPLATES.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -1679,19 +1829,17 @@ export function Watchlist({
               </span>
             </button>
             {(selectedGroupId === 0 || selectedGroup?.wheel_enabled !== false) && section === "to_watch" && (
-              <button type="button" onClick={spinWheel} className="btn-ghost ml-auto">
+              <button type="button" onClick={spinWheel} className="btn-ghost">
                 <RotateCw className="h-4 w-4" /> Wheel spin
               </button>
             )}
-          </div>
 
-          <div className="space-y-1">
-            <div className="relative">
+            <div className="relative min-w-[10rem] flex-1 basis-40">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
               <input
                 value={itemFilter}
                 onChange={(e) => setItemFilter(e.target.value)}
-                placeholder="Filter titles in this group…"
+                placeholder="Filter titles…"
                 className="input w-full pl-10 text-sm"
               />
               {itemFilter && (
@@ -1705,83 +1853,84 @@ export function Watchlist({
                 </button>
               )}
             </div>
-            {itemFilter.trim() && (
-              <p className="text-xs text-slate-500">
-                Showing {filteredItems.length} of {items.length}
-              </p>
+
+            <button
+              type="button"
+              onClick={() => setFiltersOpen((v) => !v)}
+              className={`btn-ghost ${watcherFilter !== "any" ? "border border-brand-500/40" : ""}`}
+            >
+              <SlidersHorizontal className="h-4 w-4" /> Filters
+              {filtersOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            </button>
+
+            {section === "to_watch" && (
+              <KebabMenu
+                label="Bulk actions"
+                items={[
+                  {
+                    label: "Add unwatched in library to queue",
+                    icon: <ListPlus className="h-3.5 w-3.5" />,
+                    onClick: queueUnwatchedInGroup,
+                    disabled: groupQueueBusy,
+                  },
+                  {
+                    label: "Play next unwatched",
+                    icon: <Play className="h-3.5 w-3.5" />,
+                    onClick: playNextUnwatched,
+                    disabled: groupQueueBusy,
+                  },
+                ]}
+              />
             )}
           </div>
 
-          <label className="flex w-full flex-wrap items-center gap-2 text-xs text-slate-400 sm:w-auto">
-            <span className="shrink-0">Watched by</span>
-            <select
-              className="input max-w-full py-1 text-xs sm:max-w-[14rem]"
-              value={String(watcherFilter)}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (v === "any" || v === "not_me") setWatcherFilter(v);
-                else setWatcherFilter(Number(v));
-              }}
-            >
-              <option value="any">Anyone</option>
-              <option value="not_me">Not me</option>
-              {watcherOptions.map((u) => (
-                <option key={u.user_id} value={u.user_id}>
-                  {u.username}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {section === "watched" && (
-            <label className="flex w-full flex-wrap items-center gap-2 text-xs text-slate-400 sm:w-auto">
-              <span className="shrink-0">Sort</span>
-              <select
-                className="input max-w-full py-1 text-xs sm:max-w-[14rem]"
-                value={watchedSort}
-                onChange={(e) => setWatchedSort(e.target.value as WatchedSort)}
-              >
-                <option value="needs_rating">{watchedSortLabel("needs_rating")}</option>
-                <option value="recent">{watchedSortLabel("recent")}</option>
-                <option value="oldest">{watchedSortLabel("oldest")}</option>
-                <option value="title">{watchedSortLabel("title")}</option>
-              </select>
-              {(counts.needs_rating ?? 0) > 0 && (
-                <span className="text-amber-300/90">
-                  {counts.needs_rating} not rated yet
-                </span>
-              )}
-            </label>
+          {itemFilter.trim() && (
+            <p className="text-xs text-slate-500">
+              Showing {filteredItems.length} of {items.length}
+            </p>
           )}
 
-          {section === "to_watch" && (
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={groupQueueBusy}
-                onClick={queueUnwatchedInGroup}
-                className="btn-ghost text-xs"
-              >
-                {groupQueueBusy ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <ListPlus className="h-3.5 w-3.5" />
-                )}
-                Add unwatched in library to queue
-              </button>
-              <button
-                type="button"
-                disabled={groupQueueBusy}
-                onClick={playNextUnwatched}
-                className="btn-ghost text-xs"
-              >
-                {groupQueueBusy ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Play className="h-3.5 w-3.5" />
-                )}
-                Play next unwatched
-              </button>
+          {filtersOpen && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg bg-black/20 p-2.5">
+              <label className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                <span className="shrink-0">Watched by</span>
+                <select
+                  className="input max-w-full py-1 text-xs sm:max-w-[14rem]"
+                  value={String(watcherFilter)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "any" || v === "not_me") setWatcherFilter(v);
+                    else setWatcherFilter(Number(v));
+                  }}
+                >
+                  <option value="any">Anyone</option>
+                  <option value="not_me">Not me</option>
+                  {watcherOptions.map((u) => (
+                    <option key={u.user_id} value={u.user_id}>
+                      {u.username}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {section === "watched" && (
+                <label className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                  <span className="shrink-0">Sort</span>
+                  <select
+                    className="input max-w-full py-1 text-xs sm:max-w-[14rem]"
+                    value={watchedSort}
+                    onChange={(e) => setWatchedSort(e.target.value as WatchedSort)}
+                  >
+                    <option value="needs_rating">{watchedSortLabel("needs_rating")}</option>
+                    <option value="recent">{watchedSortLabel("recent")}</option>
+                    <option value="oldest">{watchedSortLabel("oldest")}</option>
+                    <option value="title">{watchedSortLabel("title")}</option>
+                  </select>
+                  {(counts.needs_rating ?? 0) > 0 && (
+                    <span className="text-amber-300/90">{counts.needs_rating} not rated yet</span>
+                  )}
+                </label>
+              )}
             </div>
           )}
 
