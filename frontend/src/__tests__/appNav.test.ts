@@ -37,6 +37,30 @@ describe("readNavFromLocation", () => {
   });
 });
 
+describe("appNav aliases (plan 023 groundwork for plan 022 nav rename)", () => {
+  it("parses the 'tonight' alias as the existing queue panel", () => {
+    window.history.replaceState({}, "", "/?tab=tonight");
+    expect(readNavFromLocation().tab).toBe("queue");
+  });
+
+  it("parses the 'add' alias as the existing downloads panel", () => {
+    window.history.replaceState({}, "", "/?tab=add");
+    expect(readNavFromLocation().tab).toBe("downloads");
+  });
+
+  it("still parses old tab values unaffected by the alias mapping", () => {
+    window.history.replaceState({}, "", "/?tab=queue");
+    expect(readNavFromLocation().tab).toBe("queue");
+    window.history.replaceState({}, "", "/?tab=checklist");
+    expect(readNavFromLocation().tab).toBe("checklist");
+  });
+
+  it("still falls back to the downloads default for unknown values", () => {
+    window.history.replaceState({}, "", "/?tab=not-a-real-tab");
+    expect(readNavFromLocation().tab).toBe("downloads");
+  });
+});
+
 describe("writeNavToLocation + readNavFromLocation round-trip", () => {
   it("round-trips tab and watchlist section", () => {
     writeNavToLocation({ tab: "watchlist", watchlistGroupId: 7, watchlistSection: "watched" });

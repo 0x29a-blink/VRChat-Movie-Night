@@ -13,25 +13,32 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react";
-import { type Dispatch, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
+import { type Dispatch, lazy, type SetStateAction, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { useAppRealtime } from "./appRealtime";
 import { readNavFromLocation, writeNavToLocation, type AppTab, type WatchlistSection } from "./appNav";
-import { Downloads } from "./components/Downloads";
-import { Library } from "./components/Library";
 import { Login } from "./components/Login";
-import { MovieNightChecklist } from "./components/MovieNightChecklist";
 import { PlaybackProvider } from "./components/PlaybackContext";
-import { QueuePlayer } from "./components/QueuePlayer";
-import { SettingsPage } from "./components/SettingsPage";
-import { Stats } from "./components/Stats";
+import { TabSkeleton } from "./components/TabSkeleton";
 import { ToastProvider, useToast } from "./components/Toast";
 import { WatchlistAddProvider } from "./watchlistAddModal";
-import { Watchlist } from "./components/Watchlist";
 import { fmtMs } from "./format";
 import type { AppEvent, Job, MovieNightSession, PlayerState, QueueSnapshot, UserInfo } from "./types";
 import { clearStreamLaunchFromLocation, readStreamLaunchFromLocation, type StreamLaunch } from "./streamOpenUrl";
 import type { WsStatus } from "./ws";
+
+// Tab-level components are code-split: each becomes its own chunk, loaded on
+// first navigation to that tab (see plans/023-shell-code-splitting.md). Only
+// Login and the context Providers stay in the eager shell bundle.
+const Downloads = lazy(() => import("./components/Downloads").then((m) => ({ default: m.Downloads })));
+const Library = lazy(() => import("./components/Library").then((m) => ({ default: m.Library })));
+const Watchlist = lazy(() => import("./components/Watchlist").then((m) => ({ default: m.Watchlist })));
+const Stats = lazy(() => import("./components/Stats").then((m) => ({ default: m.Stats })));
+const QueuePlayer = lazy(() => import("./components/QueuePlayer").then((m) => ({ default: m.QueuePlayer })));
+const MovieNightChecklist = lazy(() =>
+  import("./components/MovieNightChecklist").then((m) => ({ default: m.MovieNightChecklist }))
+);
+const SettingsPage = lazy(() => import("./components/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 
 type Tab = AppTab;
 type ObsState = { connected: boolean; streaming: boolean };
@@ -239,36 +246,38 @@ function AppShell() {
 
           <div className="flex-1 overflow-y-auto">
             <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
-              <MainPanels
-                tab={tab}
-                user={user}
-                jobs={jobs}
-                queue={queue}
-                player={player}
-                obs={obs}
-                activityEvent={activityEvent}
-                session={session}
-                onSessionChange={setSession}
-                libVersion={libVersion}
-                watchlistVersion={watchlistVersion}
-                watchlistGroupId={watchlistGroupId}
-                watchlistSection={watchlistSection}
-                pendingStreamLaunch={pendingStreamLaunch}
-                onChanged={refreshAll}
-                onJobRemoved={(id) => setJobs((prev) => prev.filter((j) => j.id !== id))}
-                onInitialStreamOpenHandled={() => setPendingStreamLaunch(null)}
-                onWatchlistGroupChange={(gid) => {
-                  setWatchlistGroupId(gid);
-                  writeNavToLocation({ tab: "watchlist", watchlistGroupId: gid, watchlistSection });
-                }}
-                onWatchlistSectionChange={(section) => {
-                  setWatchlistSection(section);
-                  writeNavToLocation({ tab: "watchlist", watchlistGroupId, watchlistSection: section });
-                }}
-                onGoToQueue={goToQueue}
-                onObs={setObs}
-                onChecklistIssuesChange={setChecklistIssues}
-              />
+              <Suspense fallback={<TabSkeleton tab={tab} />}>
+                <MainPanels
+                  tab={tab}
+                  user={user}
+                  jobs={jobs}
+                  queue={queue}
+                  player={player}
+                  obs={obs}
+                  activityEvent={activityEvent}
+                  session={session}
+                  onSessionChange={setSession}
+                  libVersion={libVersion}
+                  watchlistVersion={watchlistVersion}
+                  watchlistGroupId={watchlistGroupId}
+                  watchlistSection={watchlistSection}
+                  pendingStreamLaunch={pendingStreamLaunch}
+                  onChanged={refreshAll}
+                  onJobRemoved={(id) => setJobs((prev) => prev.filter((j) => j.id !== id))}
+                  onInitialStreamOpenHandled={() => setPendingStreamLaunch(null)}
+                  onWatchlistGroupChange={(gid) => {
+                    setWatchlistGroupId(gid);
+                    writeNavToLocation({ tab: "watchlist", watchlistGroupId: gid, watchlistSection });
+                  }}
+                  onWatchlistSectionChange={(section) => {
+                    setWatchlistSection(section);
+                    writeNavToLocation({ tab: "watchlist", watchlistGroupId, watchlistSection: section });
+                  }}
+                  onGoToQueue={goToQueue}
+                  onObs={setObs}
+                  onChecklistIssuesChange={setChecklistIssues}
+                />
+              </Suspense>
             </div>
           </div>
         </main>

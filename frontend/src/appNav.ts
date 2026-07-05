@@ -1,6 +1,14 @@
 export type AppTab = "downloads" | "library" | "watchlist" | "stats" | "queue" | "checklist" | "settings";
 
-const VALID_TABS = new Set<AppTab>([
+// "tonight" and "add" are target-state nav names (see
+// plans/022-ui-v2-design-spec.md). In THIS plan they are accepted as URL
+// aliases and canonicalized to the existing panels they currently render
+// ("queue" and "downloads" respectively) — no layout change yet. Plan 024
+// flips this: those become the real canonical AppTab values and this mapping
+// direction reverses (existing values will alias to them instead).
+type LegacyOrAliasTab = AppTab | "tonight" | "add";
+
+const VALID_INPUT_TABS = new Set<LegacyOrAliasTab>([
   "downloads",
   "library",
   "watchlist",
@@ -8,11 +16,19 @@ const VALID_TABS = new Set<AppTab>([
   "queue",
   "checklist",
   "settings",
+  "tonight",
+  "add",
 ]);
 
+const ALIAS_TO_CANONICAL: Partial<Record<LegacyOrAliasTab, AppTab>> = {
+  tonight: "queue",
+  add: "downloads",
+};
+
 function parseAppTab(value: string | null): AppTab | null {
-  if (value && VALID_TABS.has(value as AppTab)) return value as AppTab;
-  return null;
+  if (!value || !VALID_INPUT_TABS.has(value as LegacyOrAliasTab)) return null;
+  const input = value as LegacyOrAliasTab;
+  return ALIAS_TO_CANONICAL[input] ?? (input as AppTab);
 }
 
 export type WatchlistSection = "to_watch" | "watched";
