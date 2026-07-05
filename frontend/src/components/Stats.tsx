@@ -275,15 +275,71 @@ function StatCard({ label, value, sub, icon: Icon }: { label: string; value: str
   );
 }
 
-function Section({ title, icon: Icon, empty, children }: { title: string; icon: typeof Star; empty?: string; children?: React.ReactNode }) {
+function Section({
+  title,
+  icon: Icon,
+  empty,
+  children,
+  collapsible,
+  open,
+  defaultOpen,
+  onToggle,
+  teaser,
+}: {
+  title: string;
+  icon: typeof Star;
+  empty?: string;
+  children?: React.ReactNode;
+  /** When true, renders a chevron toggle and hides the body while collapsed. Default: always expanded (unchanged legacy behavior). */
+  collapsible?: boolean;
+  /** Controlled open state. Only meaningful when `collapsible` is true. */
+  open?: boolean;
+  /** Uncontrolled initial open state, used when `open`/`onToggle` aren't provided. */
+  defaultOpen?: boolean;
+  onToggle?: (next: boolean) => void;
+  /** One-line summary shown next to the title while collapsed. */
+  teaser?: React.ReactNode;
+}) {
   const hasContent = children != null && children !== false;
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen ?? false);
+  const isControlled = open != null;
+  const isOpen = !collapsible || (isControlled ? open : uncontrolledOpen);
+
+  const toggle = () => {
+    if (!collapsible) return;
+    if (onToggle) onToggle(!isOpen);
+    if (!isControlled) setUncontrolledOpen((v) => !v);
+  };
+
   return (
     <section className="rounded-xl border border-white/5 bg-ink-850/70 p-3">
-      <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-white">
-        <Icon className="h-3.5 w-3.5 text-brand-400" />
-        {title}
-      </h2>
-      {hasContent ? children : <p className="text-xs text-slate-500">{empty ?? "Nothing here yet."}</p>}
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={toggle}
+          className="mb-0 flex w-full items-center justify-between gap-2 text-left"
+          aria-expanded={isOpen}
+        >
+          <span className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-white">
+            <Icon className="h-3.5 w-3.5 shrink-0 text-brand-400" />
+            {title}
+          </span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            {!isOpen && teaser != null && <span className="truncate text-[11px] font-normal text-slate-400">{teaser}</span>}
+            {isOpen ? (
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+            )}
+          </span>
+        </button>
+      ) : (
+        <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-white">
+          <Icon className="h-3.5 w-3.5 text-brand-400" />
+          {title}
+        </h2>
+      )}
+      {isOpen && <div className={collapsible ? "mt-2" : undefined}>{hasContent ? children : <p className="text-xs text-slate-500">{empty ?? "Nothing here yet."}</p>}</div>}
     </section>
   );
 }
@@ -568,7 +624,7 @@ function TimelineSparkline({ counts }: { counts: { date: string; count: number }
   );
 }
 
-function TimelineSection() {
+function TimelineSection({ open, onToggle }: { open: boolean; onToggle: (next: boolean) => void }) {
   const [timeline, setTimeline] = useState<StatsTimeline | null>(null);
   const [error, setError] = useState("");
 
@@ -591,8 +647,22 @@ function TimelineSection() {
   if (error) return null;
   if (!timeline) return null;
 
+  const teaser = timeline.busiest_day
+    ? `Busiest: ${formatRelativeDate(timeline.busiest_day.date)} (${timeline.busiest_day.count})`
+    : totalWatches > 0 || totalRatings > 0
+      ? `${totalWatches} watched · ${totalRatings} rated`
+      : "No activity";
+
   return (
-    <Section title="Last 90 days" icon={Zap} empty="No activity in the last 90 days.">
+    <Section
+      title="Last 90 days"
+      icon={Zap}
+      empty="No activity in the last 90 days."
+      collapsible
+      open={open}
+      onToggle={onToggle}
+      teaser={teaser}
+    >
       {(totalWatches > 0 || totalRatings > 0) && (
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -629,6 +699,18 @@ function TimelineSection() {
   );
 }
 
+const SECTION_KEYS = [
+  "timeline",
+  "favorites",
+  "lowest_rated",
+  "perfect_scores",
+  "recently_watched",
+  "everyone_finished",
+  "hot_takes",
+  "most_debated",
+] as const;
+type SectionKey = (typeof SECTION_KEYS)[number];
+
 function GroupStatsView({
   stats,
   memberFilterActive,
@@ -641,6 +723,34 @@ function GroupStatsView({
   onComments: (item: StatsTitle) => void;
 }) {
   const { overview } = stats;
+  const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>(
+    () => Object.fromEntries(SECTION_KEYS.map((k) => [k, false])) as Record<SectionKey, boolean>
+  );
+  const toggleSection = (key: SectionKey) => (next: boolean) => setOpenSections((prev) => ({ ...prev, [key]: next }));
+  const allOpen = SECTION_KEYS.every((k) => openSections[k]);
+  const setAll = (next: boolean) => setOpenSections(Object.fromEntries(SECTION_KEYS.map((k) => [k, next])) as Record<SectionKey, boolean>);
+
+  const topRatedTeaser = stats.top_rated[0]
+    ? `${stats.top_rated[0].title} · ${formatStars(stats.top_rated[0].avg_stars!)}★`
+    : undefined;
+  const worstRatedTeaser = stats.worst_rated[0]
+    ? `${stats.worst_rated[0].title} · ${formatStars(stats.worst_rated[0].avg_stars!)}★`
+    : undefined;
+  const perfectScoresTeaser = stats.perfect_scores[0]
+    ? `${stats.perfect_scores.length} title${stats.perfect_scores.length !== 1 ? "s" : ""} · latest ${stats.perfect_scores[0].title}`
+    : undefined;
+  const recentlyWatchedTeaser = stats.recently_watched[0]
+    ? `${stats.recently_watched[0].title}${stats.recently_watched[0].latest_watched_at ? ` · ${formatRelativeDate(stats.recently_watched[0].latest_watched_at)}` : ""}`
+    : undefined;
+  const everyoneFinishedTeaser = stats.everyone_watched[0]
+    ? `${stats.everyone_watched.length} title${stats.everyone_watched.length !== 1 ? "s" : ""} · latest ${stats.everyone_watched[0].title}`
+    : undefined;
+  const hotTakesTeaser = stats.most_divisive[0]
+    ? `${stats.most_divisive[0].title} · ±${formatStars(stats.most_divisive[0].rating_stddev!)} spread`
+    : undefined;
+  const mostDebatedTeaser = stats.most_commented[0]
+    ? `${stats.most_commented[0].title} · ${stats.most_commented[0].comment_count} comment${stats.most_commented[0].comment_count !== 1 ? "s" : ""}`
+    : undefined;
 
   return (
     <div className="space-y-3">
@@ -662,12 +772,26 @@ function GroupStatsView({
         <StatCard label="Members" value={overview.active_users} sub={memberFilterActive ? "in filter" : "active"} icon={Users} />
       </div>
 
-      <TimelineSection />
+      <div className="flex justify-end">
+        <button type="button" onClick={() => setAll(!allOpen)} className="text-[11px] font-medium text-brand-300 hover:text-brand-200">
+          {allOpen ? "Collapse all" : "Expand all"}
+        </button>
+      </div>
+
+      <TimelineSection open={openSections.timeline} onToggle={toggleSection("timeline")} />
 
       <div className="grid gap-3 lg:grid-cols-2">
         <div className="space-y-3">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Ratings</p>
-          <Section title="Favorites" icon={Star} empty="Not enough shared ratings yet.">
+          <Section
+            title="Favorites"
+            icon={Star}
+            empty="Not enough shared ratings yet."
+            collapsible
+            open={openSections.favorites}
+            onToggle={toggleSection("favorites")}
+            teaser={topRatedTeaser}
+          >
             {stats.top_rated.length > 0 && (
               <div className="space-y-1.5">
                 {stats.top_rated.map((item, i) => (
@@ -687,7 +811,15 @@ function GroupStatsView({
               </div>
             )}
           </Section>
-          <Section title="Lowest rated" icon={ThumbsDown} empty="Not enough shared ratings yet.">
+          <Section
+            title="Lowest rated"
+            icon={ThumbsDown}
+            empty="Not enough shared ratings yet."
+            collapsible
+            open={openSections.lowest_rated}
+            onToggle={toggleSection("lowest_rated")}
+            teaser={worstRatedTeaser}
+          >
             {stats.worst_rated.length > 0 && (
               <div className="space-y-1.5">
                 {stats.worst_rated.map((item, i) => (
@@ -706,7 +838,15 @@ function GroupStatsView({
               </div>
             )}
           </Section>
-          <Section title="Perfect scores" icon={Sparkles} empty="No unanimous 5★ titles yet.">
+          <Section
+            title="Perfect scores"
+            icon={Sparkles}
+            empty="No unanimous 5★ titles yet."
+            collapsible
+            open={openSections.perfect_scores}
+            onToggle={toggleSection("perfect_scores")}
+            teaser={perfectScoresTeaser}
+          >
             {stats.perfect_scores.length > 0 && (
               <div className="space-y-1.5">
                 {stats.perfect_scores.map((item, i) => (
@@ -726,7 +866,15 @@ function GroupStatsView({
         <div className="space-y-3">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Activity</p>
           <NeedsRatingCard entries={stats.needs_rating} />
-          <Section title="Recently watched" icon={Star} empty="Nothing marked watched yet.">
+          <Section
+            title="Recently watched"
+            icon={Star}
+            empty="Nothing marked watched yet."
+            collapsible
+            open={openSections.recently_watched}
+            onToggle={toggleSection("recently_watched")}
+            teaser={recentlyWatchedTeaser}
+          >
             {stats.recently_watched.length > 0 && (
               <div className="space-y-1.5">
                 {stats.recently_watched.map((item) => (
@@ -746,7 +894,15 @@ function GroupStatsView({
               </div>
             )}
           </Section>
-          <Section title="Everyone finished" icon={Users} empty={memberFilterActive ? "Nothing finished by all selected." : "Nothing finished by everyone."}>
+          <Section
+            title="Everyone finished"
+            icon={Users}
+            empty={memberFilterActive ? "Nothing finished by all selected." : "Nothing finished by everyone."}
+            collapsible
+            open={openSections.everyone_finished}
+            onToggle={toggleSection("everyone_finished")}
+            teaser={everyoneFinishedTeaser}
+          >
             {stats.everyone_watched.length > 0 && (
               <div className="space-y-1.5">
                 {stats.everyone_watched.map((item) => (
@@ -766,7 +922,15 @@ function GroupStatsView({
               </div>
             )}
           </Section>
-          <Section title="Hot takes" icon={Zap} empty="Need more disagreement.">
+          <Section
+            title="Hot takes"
+            icon={Zap}
+            empty="Need more disagreement."
+            collapsible
+            open={openSections.hot_takes}
+            onToggle={toggleSection("hot_takes")}
+            teaser={hotTakesTeaser}
+          >
             {stats.most_divisive.length > 0 && (
               <div className="space-y-1.5">
                 {stats.most_divisive.map((item, i) => (
@@ -785,7 +949,15 @@ function GroupStatsView({
               </div>
             )}
           </Section>
-          <Section title="Most debated" icon={MessageSquare} empty="No comments yet.">
+          <Section
+            title="Most debated"
+            icon={MessageSquare}
+            empty="No comments yet."
+            collapsible
+            open={openSections.most_debated}
+            onToggle={toggleSection("most_debated")}
+            teaser={mostDebatedTeaser}
+          >
             {stats.most_commented.length > 0 && (
               <div className="space-y-1.5">
                 {stats.most_commented.map((item, i) => (
