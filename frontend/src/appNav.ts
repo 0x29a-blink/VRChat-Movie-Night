@@ -1,28 +1,28 @@
-export type AppTab = "downloads" | "library" | "watchlist" | "stats" | "queue" | "checklist" | "settings";
+export type AppTab = "tonight" | "library" | "watchlist" | "stats" | "add" | "settings";
 
-// "tonight" and "add" are target-state nav names (see
-// plans/022-ui-v2-design-spec.md). In THIS plan they are accepted as URL
-// aliases and canonicalized to the existing panels they currently render
-// ("queue" and "downloads" respectively) — no layout change yet. Plan 024
-// flips this: those become the real canonical AppTab values and this mapping
-// direction reverses (existing values will alias to them instead).
-type LegacyOrAliasTab = AppTab | "tonight" | "add";
+// "tonight" and "add" are the canonical target-state nav names (see
+// plans/022-ui-v2-design-spec.md, landed by plan 024). "downloads", "queue",
+// and "checklist" are legacy URL values from before the Tonight rework —
+// they're accepted as aliases and canonicalized to the panels that absorbed
+// them (Add Media and the Tonight cockpit) so old bookmarks/links keep working.
+type LegacyOrAliasTab = AppTab | "downloads" | "queue" | "checklist";
 
 const VALID_INPUT_TABS = new Set<LegacyOrAliasTab>([
-  "downloads",
+  "tonight",
   "library",
   "watchlist",
   "stats",
+  "add",
+  "settings",
+  "downloads",
   "queue",
   "checklist",
-  "settings",
-  "tonight",
-  "add",
 ]);
 
 const ALIAS_TO_CANONICAL: Partial<Record<LegacyOrAliasTab, AppTab>> = {
-  tonight: "queue",
-  add: "downloads",
+  downloads: "add",
+  queue: "tonight",
+  checklist: "tonight",
 };
 
 function parseAppTab(value: string | null): AppTab | null {
@@ -47,7 +47,7 @@ function parseWatchlistSection(value: string | null): WatchlistSection | undefin
 export function readNavFromLocation(): NavState {
   const params = new URLSearchParams(window.location.search);
   return {
-    tab: parseAppTab(params.get("tab")) ?? "downloads",
+    tab: parseAppTab(params.get("tab")) ?? "tonight",
     watchlistGroupId: params.has("group") ? Number(params.get("group")) : undefined,
     watchlistSection: parseWatchlistSection(params.get("section")),
   };

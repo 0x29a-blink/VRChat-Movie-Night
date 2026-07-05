@@ -31,7 +31,7 @@ function mediaMtxDetail(status: PreflightStatus): string {
   if (!status.mediamtx_running) return status.hls_error || "Run start-stack.cmd or mediamtx.cmd (port 8888)";
   return status.hls_stream_active
     ? "Relay responding — VRChat can load the stream"
-    : status.hls_error || "Normal before Go live — start the stream from Queue & Player";
+    : status.hls_error || "Normal before Go live — start the stream from Tonight";
 }
 
 function hlsDetail(status: PreflightStatus): string {
@@ -39,7 +39,7 @@ function hlsDetail(status: PreflightStatus): string {
   if (status.obs_streaming) {
     return status.hls_error || "OBS is live but HLS not ready — check RTMP server/key or wait a few seconds";
   }
-  return status.hls_error || "Start streaming from Queue & Player when ready";
+  return status.hls_error || "Start streaming from Tonight when ready";
 }
 
 function aiostreamsDetail(status: PreflightStatus): string {

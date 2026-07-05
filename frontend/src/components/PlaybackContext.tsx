@@ -34,7 +34,7 @@ export function PlaybackProvider({
       return;
     }
     if (!obs.streaming) {
-      pushToast("Playback started — click Go live on Queue & Player so friends can watch.", "info");
+      pushToast("Playback started — click Go live on Tonight so friends can watch.", "info");
     }
   }, [obs.connected, obs.streaming, pushToast]);
 

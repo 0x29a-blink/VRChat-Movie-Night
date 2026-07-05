@@ -3,12 +3,11 @@ import type { AppTab } from "../appNav";
 type SkeletonVariant = "list" | "grid";
 
 const TAB_VARIANT: Partial<Record<AppTab, SkeletonVariant>> = {
-  downloads: "list",
+  tonight: "list",
   library: "grid",
   watchlist: "list",
   stats: "grid",
-  queue: "list",
-  checklist: "list",
+  add: "list",
   settings: "list",
 };
 

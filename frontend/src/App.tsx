@@ -2,7 +2,6 @@ import {
   BarChart2,
   Bookmark,
   Clapperboard,
-  ClipboardCheck,
   Download,
   ListVideo,
   Loader2,
@@ -23,7 +22,7 @@ import { TabSkeleton } from "./components/TabSkeleton";
 import { ToastProvider, useToast } from "./components/Toast";
 import { WatchlistAddProvider } from "./watchlistAddModal";
 import { fmtMs } from "./format";
-import type { AppEvent, Job, MovieNightSession, PlayerState, QueueSnapshot, UserInfo } from "./types";
+import type { AppEvent, Job, MovieNightSession, PlayerState, PreflightStatus, QueueSnapshot, UserInfo } from "./types";
 import { clearStreamLaunchFromLocation, readStreamLaunchFromLocation, type StreamLaunch } from "./streamOpenUrl";
 import type { WsStatus } from "./ws";
 
@@ -34,22 +33,18 @@ const Downloads = lazy(() => import("./components/Downloads").then((m) => ({ def
 const Library = lazy(() => import("./components/Library").then((m) => ({ default: m.Library })));
 const Watchlist = lazy(() => import("./components/Watchlist").then((m) => ({ default: m.Watchlist })));
 const Stats = lazy(() => import("./components/Stats").then((m) => ({ default: m.Stats })));
-const QueuePlayer = lazy(() => import("./components/QueuePlayer").then((m) => ({ default: m.QueuePlayer })));
-const MovieNightChecklist = lazy(() =>
-  import("./components/MovieNightChecklist").then((m) => ({ default: m.MovieNightChecklist }))
-);
+const Tonight = lazy(() => import("./components/Tonight").then((m) => ({ default: m.Tonight })));
 const SettingsPage = lazy(() => import("./components/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 
 type Tab = AppTab;
 type ObsState = { connected: boolean; streaming: boolean };
 
 const NAV: { id: Tab; label: string; icon: typeof Download }[] = [
-  { id: "downloads", label: "Get Videos", icon: Download },
-  { id: "library", label: "Library", icon: ListVideo },
+  { id: "tonight", label: "Tonight", icon: Clapperboard },
   { id: "watchlist", label: "Watchlist", icon: Bookmark },
+  { id: "library", label: "Library", icon: ListVideo },
+  { id: "add", label: "Add Media", icon: Download },
   { id: "stats", label: "Stats", icon: BarChart2 },
-  { id: "queue", label: "Queue & Player", icon: Clapperboard },
-  { id: "checklist", label: "Movie Night", icon: ClipboardCheck },
   { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
@@ -59,7 +54,7 @@ function AppShell() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const initialNav = readNavFromLocation();
   const [tab, setTab] = useState<Tab>(() =>
-    readStreamLaunchFromLocation() ? "downloads" : initialNav.tab
+    readStreamLaunchFromLocation() ? "add" : initialNav.tab
   );
   const [watchlistGroupId, setWatchlistGroupId] = useState<number | undefined>(initialNav.watchlistGroupId);
   const [watchlistSection, setWatchlistSection] = useState<WatchlistSection>(
@@ -81,10 +76,11 @@ function AppShell() {
   const [pendingStreamLaunch, setPendingStreamLaunch] = useState<StreamLaunch | null>(() =>
     readStreamLaunchFromLocation()
   );
-  const [checklistIssues, setChecklistIssues] = useState(0);
+  const [preflight, setPreflight] = useState<PreflightStatus | null>(null);
   const [navOpen, setNavOpen] = useState(false);
 
-  const goToQueue = useCallback(() => setTab("queue"), []);
+  const goToQueue = useCallback(() => setTab("tonight"), []);
+  const goToAddMedia = useCallback(() => setTab("add"), []);
 
   const navigateTab = useCallback(
     (next: Tab, groupId?: number) => {
@@ -136,7 +132,7 @@ function AppShell() {
     const launch = pendingStreamLaunch ?? fromUrl;
     if (!launch) return;
     if (fromUrl) clearStreamLaunchFromLocation();
-    navigateTab("downloads");
+    navigateTab("add");
     if (!pendingStreamLaunch) setPendingStreamLaunch(launch);
   }, [authed, pendingStreamLaunch, navigateTab]);
 
@@ -153,8 +149,23 @@ function AppShell() {
     checklistBusyRef.current = true;
     api
       .preflight()
-      .then((s) => setChecklistIssues((s.issues ?? []).length))
-      .catch(() => setChecklistIssues(1))
+      .then((s) => setPreflight(s))
+      .catch(() =>
+        setPreflight((prev) => ({
+          api: false,
+          obs_connected: false,
+          obs_streaming: false,
+          mediamtx_running: false,
+          hls_stream_active: false,
+          hls_reachable: false,
+          hls_url: prev?.hls_url ?? "",
+          users: prev?.users ?? 0,
+          tools: prev?.tools ?? [],
+          issues: ["Could not reach the API"],
+          checklist_ok: false,
+          ready: false,
+        }))
+      )
       .finally(() => {
         checklistBusyRef.current = false;
       });
@@ -166,6 +177,8 @@ function AppShell() {
     const t = setInterval(refreshChecklistIssues, 30000);
     return () => clearInterval(t);
   }, [authed, refreshChecklistIssues]);
+
+  const checklistIssues = (preflight?.issues ?? []).length;
 
   const wsStatus = useAppRealtime({
     authed: authed === true,
@@ -274,8 +287,10 @@ function AppShell() {
                     writeNavToLocation({ tab: "watchlist", watchlistGroupId, watchlistSection: section });
                   }}
                   onGoToQueue={goToQueue}
+                  onGoToAddMedia={goToAddMedia}
                   onObs={setObs}
-                  onChecklistIssuesChange={setChecklistIssues}
+                  preflight={preflight}
+                  activeDownloads={activeDownloads}
                 />
               </Suspense>
             </div>
@@ -398,13 +413,13 @@ function AppNavButton({
         <Icon className={`h-[18px] w-[18px] ${active ? "text-brand-400" : "text-slate-400"}`} />
         {item.label}
       </span>
-      {item.id === "downloads" && activeDownloads > 0 && (
+      {item.id === "add" && activeDownloads > 0 && (
         <span className="chip bg-brand-500/20 text-brand-300">{activeDownloads}</span>
       )}
-      {item.id === "queue" && queueCount > 0 && (
+      {item.id === "tonight" && queueCount > 0 && (
         <span className="chip bg-white/10 text-slate-300">{queueCount}</span>
       )}
-      {item.id === "checklist" && checklistIssues > 0 && (
+      {item.id === "tonight" && checklistIssues > 0 && (
         <span
           className="h-2 w-2 shrink-0 rounded-full bg-red-500 ring-2 ring-ink-900"
           title={`${checklistIssues} checklist issue${checklistIssues === 1 ? "" : "s"}`}
@@ -485,12 +500,12 @@ function PlaybackNotice({
       {paused ? (
         <span className="flex items-center gap-2">
           <Pause className="h-4 w-4 shrink-0" />
-          Intermission — playback is paused. Resume on Queue &amp; Player when ready.
+          Intermission — playback is paused. Resume on Tonight when ready.
         </span>
       ) : (
         <span>
-          Video is playing locally but the stream is not live — click <strong>Go live</strong> on Queue &amp; Player
-          so friends see it in VRChat.
+          Video is playing locally but the stream is not live — click <strong>Go live</strong> on Tonight so friends
+          see it in VRChat.
         </span>
       )}
     </div>
@@ -518,8 +533,10 @@ function MainPanels({
   onWatchlistGroupChange,
   onWatchlistSectionChange,
   onGoToQueue,
+  onGoToAddMedia,
   onObs,
-  onChecklistIssuesChange,
+  preflight,
+  activeDownloads,
 }: {
   tab: Tab;
   user: UserInfo;
@@ -541,11 +558,30 @@ function MainPanels({
   onWatchlistGroupChange: (id?: number) => void;
   onWatchlistSectionChange: (section: WatchlistSection) => void;
   onGoToQueue: () => void;
+  onGoToAddMedia: () => void;
   onObs: Dispatch<SetStateAction<ObsState>>;
-  onChecklistIssuesChange: Dispatch<SetStateAction<number>>;
+  preflight: PreflightStatus | null;
+  activeDownloads: number;
 }) {
   switch (tab) {
-    case "downloads":
+    case "tonight":
+      return (
+        <Tonight
+          queue={queue}
+          player={player}
+          obs={obs}
+          onObs={onObs}
+          activityEvent={activityEvent}
+          user={user}
+          session={session}
+          onSessionChange={onSessionChange}
+          libraryVersion={libVersion + watchlistVersion}
+          preflight={preflight}
+          activeDownloads={activeDownloads}
+          onGoToAddMedia={onGoToAddMedia}
+        />
+      );
+    case "add":
       return (
         <Downloads
           user={user}
@@ -572,22 +608,6 @@ function MainPanels({
       );
     case "stats":
       return <Stats />;
-    case "queue":
-      return (
-        <QueuePlayer
-          queue={queue}
-          player={player}
-          obs={obs}
-          onObs={onObs}
-          activityEvent={activityEvent}
-          user={user}
-          session={session}
-          onSessionChange={onSessionChange}
-          libraryVersion={libVersion + watchlistVersion}
-        />
-      );
-    case "checklist":
-      return <MovieNightChecklist onIssuesChange={onChecklistIssuesChange} />;
     case "settings":
       return <SettingsPage user={user} />;
   }

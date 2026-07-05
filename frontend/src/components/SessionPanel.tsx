@@ -14,7 +14,7 @@ interface Props {
   onSessionChange: (session: MovieNightSession | null) => void;
   player: PlayerState | null;
   user: UserInfo;
-  /** Bumped on library/watchlist changes (see QueuePlayer) — triggers a
+  /** Bumped on library/watchlist changes (see Tonight) — triggers a
    * session refetch so a pick's `needs_download` flips once its download
    * auto-links. */
   libraryVersion?: number;

@@ -6,10 +6,10 @@ beforeEach(() => {
 });
 
 describe("readNavFromLocation", () => {
-  it("defaults to the downloads tab with no params", () => {
+  it("defaults to the tonight tab with no params", () => {
     window.history.replaceState({}, "", "/");
     expect(readNavFromLocation()).toEqual({
-      tab: "downloads",
+      tab: "tonight",
       watchlistGroupId: undefined,
       watchlistSection: undefined,
     });
@@ -17,7 +17,7 @@ describe("readNavFromLocation", () => {
 
   it("falls back to defaults for an unknown tab value", () => {
     window.history.replaceState({}, "", "/?tab=not-a-real-tab");
-    expect(readNavFromLocation().tab).toBe("downloads");
+    expect(readNavFromLocation().tab).toBe("tonight");
   });
 
   it("falls back to defaults for a garbage section value", () => {
@@ -37,27 +37,32 @@ describe("readNavFromLocation", () => {
   });
 });
 
-describe("appNav aliases (plan 023 groundwork for plan 022 nav rename)", () => {
-  it("parses the 'tonight' alias as the existing queue panel", () => {
-    window.history.replaceState({}, "", "/?tab=tonight");
-    expect(readNavFromLocation().tab).toBe("queue");
+describe("appNav legacy aliases (plan 024 nav rename: Tonight is now canonical)", () => {
+  it("canonicalizes the legacy 'downloads' value to 'add'", () => {
+    window.history.replaceState({}, "", "/?tab=downloads");
+    expect(readNavFromLocation().tab).toBe("add");
   });
 
-  it("parses the 'add' alias as the existing downloads panel", () => {
-    window.history.replaceState({}, "", "/?tab=add");
-    expect(readNavFromLocation().tab).toBe("downloads");
-  });
-
-  it("still parses old tab values unaffected by the alias mapping", () => {
+  it("canonicalizes the legacy 'queue' value to 'tonight'", () => {
     window.history.replaceState({}, "", "/?tab=queue");
-    expect(readNavFromLocation().tab).toBe("queue");
-    window.history.replaceState({}, "", "/?tab=checklist");
-    expect(readNavFromLocation().tab).toBe("checklist");
+    expect(readNavFromLocation().tab).toBe("tonight");
   });
 
-  it("still falls back to the downloads default for unknown values", () => {
+  it("canonicalizes the legacy 'checklist' value to 'tonight'", () => {
+    window.history.replaceState({}, "", "/?tab=checklist");
+    expect(readNavFromLocation().tab).toBe("tonight");
+  });
+
+  it("still parses the current canonical values unaffected by the alias mapping", () => {
+    window.history.replaceState({}, "", "/?tab=tonight");
+    expect(readNavFromLocation().tab).toBe("tonight");
+    window.history.replaceState({}, "", "/?tab=add");
+    expect(readNavFromLocation().tab).toBe("add");
+  });
+
+  it("still falls back to the tonight default for unknown values", () => {
     window.history.replaceState({}, "", "/?tab=not-a-real-tab");
-    expect(readNavFromLocation().tab).toBe("downloads");
+    expect(readNavFromLocation().tab).toBe("tonight");
   });
 });
 
@@ -82,8 +87,8 @@ describe("writeNavToLocation + readNavFromLocation round-trip", () => {
   });
 
   it("clears stream params by default", () => {
-    window.history.replaceState({}, "", "/?open=1&openStremio=2&media=3&tab=downloads");
-    writeNavToLocation({ tab: "downloads" });
+    window.history.replaceState({}, "", "/?open=1&openStremio=2&media=3&tab=add");
+    writeNavToLocation({ tab: "add" });
     const params = new URLSearchParams(window.location.search);
     expect(params.has("open")).toBe(false);
     expect(params.has("openStremio")).toBe(false);
@@ -91,8 +96,8 @@ describe("writeNavToLocation + readNavFromLocation round-trip", () => {
   });
 
   it("preserves stream params when preserveStreamParams is true", () => {
-    window.history.replaceState({}, "", "/?open=1&tab=downloads");
-    writeNavToLocation({ tab: "downloads" }, true);
+    window.history.replaceState({}, "", "/?open=1&tab=add");
+    writeNavToLocation({ tab: "add" }, true);
     const params = new URLSearchParams(window.location.search);
     expect(params.get("open")).toBe("1");
   });

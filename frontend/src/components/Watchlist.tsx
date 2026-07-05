@@ -1559,7 +1559,7 @@ export function Watchlist({
       if (!obs.connected) {
         pushToast("OBS is offline — friends won't see playback in VRChat.", "error");
       } else if (!obs.streaming) {
-        pushToast("Click Go live on Queue & Player so friends can watch.", "info");
+        pushToast("Click Go live on Tonight so friends can watch.", "info");
       }
     } catch (err: unknown) {
       pushToast(err instanceof Error ? err.message : "Nothing to play", "error");
