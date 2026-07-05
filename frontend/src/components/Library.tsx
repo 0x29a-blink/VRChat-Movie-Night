@@ -1,4 +1,5 @@
 import {
+  BookmarkPlus,
   Film,
   HardDriveDownload,
   Languages,
@@ -8,19 +9,22 @@ import {
   Pencil,
   Play,
   RefreshCw,
+  Search,
   Trash2,
   Unlink,
   RefreshCcw,
   Youtube,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { fmtBytes, fmtDuration } from "../format";
 import { canLocalDownload, saveLibraryItemToPc } from "../localDownload";
+import { filterAndSortLibrary, LIBRARY_SORT_OPTIONS, type LibrarySort } from "../libraryView";
 import type { LibraryItem, UserInfo } from "../types";
-import { AddToWatchlistButton } from "./AddToWatchlist";
+import { useWatchlistAdd } from "../watchlistAddModal";
 import { ConfirmModal } from "./ConfirmModal";
+import { KebabMenu, type KebabMenuItem } from "./KebabMenu";
 import { LinkTmdbModal } from "./LinkTmdbModal";
 import { libraryLinkLabel, watchlistPayloadFromLibraryItem } from "./libraryWatchlist";
 import { PlaybackTracksPanel } from "./PlaybackTracksPanel";
@@ -36,6 +40,7 @@ const FOLDER_META: Record<string, { label: string; icon: typeof Youtube }> = {
 export function Library({ version, user }: { version: number; user: UserInfo }) {
   const { playFromLibrary, queueFromLibrary } = usePlayback();
   const { push: pushToast } = useToast();
+  const { openWatchlistAdd } = useWatchlistAdd();
   const [data, setData] = useState<Record<string, LibraryItem[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -49,6 +54,8 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
   const [deleteTarget, setDeleteTarget] = useState<LibraryItem | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [tracksItemId, setTracksItemId] = useState<number | null>(null);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<LibrarySort>("recent");
 
   const load = () => {
     setError("");
@@ -164,6 +171,15 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
     }
   };
 
+  const filteredData = useMemo(() => {
+    const out: Record<string, LibraryItem[]> = {};
+    for (const [key, items] of Object.entries(data)) {
+      out[key] = filterAndSortLibrary(items, query, sort);
+    }
+    return out;
+  }, [data, query, sort]);
+  const filteredTotal = Object.values(filteredData).reduce((n, arr) => n + arr.length, 0);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -175,6 +191,31 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
           <RefreshCw className={`h-4 w-4 ${scanning ? "animate-spin" : ""}`} /> Rescan
         </button>
       </div>
+
+      {total > 0 && (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by title or filename…"
+              className="input w-full !pl-8"
+            />
+          </div>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as LibrarySort)}
+            className="input sm:w-52"
+          >
+            {LIBRARY_SORT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center gap-2 py-12 text-slate-400">
@@ -191,9 +232,13 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
         <div className="card p-12 text-center text-slate-500">
           Nothing here yet. Download something first.
         </div>
+      ) : filteredTotal === 0 ? (
+        <div className="card p-12 text-center text-slate-500">
+          No videos match “{query}”.
+        </div>
       ) : (
         Object.entries(FOLDER_META).map(([key, meta]) => {
-          const items = data[key] || [];
+          const items = filteredData[key] || [];
           if (items.length === 0) return null;
           const Icon = meta.icon;
           return (
@@ -202,8 +247,67 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
                 <Icon className="h-4 w-4" /> {meta.label} · {items.length}
               </h2>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-                {items.map((item) => (
-                  <div key={item.id} className="card group overflow-hidden">
+                {items.map((item) => {
+                  const kebabItems: KebabMenuItem[] = [
+                    {
+                      label: tracksItemId === item.id ? "Hide tracks" : "Audio & subtitles",
+                      icon: <Languages className="h-3.5 w-3.5" />,
+                      onClick: () => setTracksItemId((id) => (id === item.id ? null : item.id)),
+                    },
+                  ];
+                  if (allowLocalDownload && item.folder === "torrents") {
+                    kebabItems.push({
+                      label: "TorBox download",
+                      icon: <HardDriveDownload className="h-3.5 w-3.5" />,
+                      onClick: () => saveToPc(item),
+                    });
+                  }
+                  if (item.linked) {
+                    kebabItems.push({
+                      label: "Relink",
+                      icon: <RefreshCcw className="h-3.5 w-3.5" />,
+                      onClick: () => {
+                        setLinkMode("relink");
+                        setLinkItem(item);
+                      },
+                    });
+                    kebabItems.push({
+                      label: "Unlink TMDB",
+                      icon: <Unlink className="h-3.5 w-3.5" />,
+                      onClick: () => unlink(item),
+                      disabled: unlinkBusy === item.id,
+                    });
+                  } else {
+                    kebabItems.push({
+                      label: "Link to movie/show",
+                      icon: <Link2 className="h-3.5 w-3.5" />,
+                      onClick: () => {
+                        setLinkMode("link");
+                        setLinkItem(item);
+                      },
+                    });
+                  }
+                  if (!item.linked || !item.on_watchlist) {
+                    kebabItems.push({
+                      label: "Add to watchlist",
+                      icon: <BookmarkPlus className="h-3.5 w-3.5" />,
+                      onClick: () => openWatchlistAdd(watchlistPayloadFromLibraryItem(item)),
+                    });
+                  }
+                  kebabItems.push({
+                    label: "Rename",
+                    icon: <Pencil className="h-3.5 w-3.5" />,
+                    onClick: () => startRename(item),
+                  });
+                  kebabItems.push({
+                    label: "Delete",
+                    icon: <Trash2 className="h-3.5 w-3.5" />,
+                    onClick: () => setDeleteTarget(item),
+                    destructive: true,
+                  });
+
+                  return (
+                  <div key={item.id} className="card overflow-hidden">
                     <div className="relative aspect-video w-full bg-ink-800">
                       {posterFor(item) ? (
                         <img src={posterFor(item)} alt="" className="h-full w-full object-cover" />
@@ -227,36 +331,6 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
                           On watchlist
                         </span>
                       )}
-                      <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/60 opacity-0 transition-opacity group-hover:opacity-100">
-                        <button
-                          onClick={() => playNow(item)}
-                          className="btn-primary !px-3 !py-2"
-                          title="Play now"
-                        >
-                          <Play className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => addToQueue(item)}
-                          className="btn-ghost !px-3 !py-2"
-                          title="Add to queue"
-                        >
-                          <ListPlus className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => startRename(item)}
-                          className="btn-ghost !px-3 !py-2"
-                          title="Rename"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => setDeleteTarget(item)}
-                          className="btn-ghost !px-3 !py-2 text-red-300"
-                          title="Delete"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
                       {item.duration > 0 && (
                         <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[11px]">
                           {fmtDuration(item.duration)}
@@ -310,90 +384,34 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
                         </div>
                       )}
                       <div className="mt-0.5 text-xs text-slate-500">{fmtBytes(item.size)}</div>
-                      <div className="mt-1.5 flex flex-col gap-1">
+                      <div className="mt-1.5 flex items-center gap-1.5">
                         <button
                           type="button"
-                          onClick={() =>
-                            setTracksItemId((id) => (id === item.id ? null : item.id))
-                          }
-                          className={`btn-ghost w-full justify-center py-1 text-[11px] ${
-                            tracksItemId === item.id ? "text-brand-300" : ""
-                          }`}
+                          onClick={() => playNow(item)}
+                          className="btn-primary flex-1 justify-center py-1 text-[11px]"
+                          title="Play now"
                         >
-                          <Languages className="h-3 w-3" />
-                          {tracksItemId === item.id ? "Hide tracks" : "Audio & subtitles"}
+                          <Play className="h-3 w-3" /> Play
                         </button>
-                        {tracksItemId === item.id && (
-                          <PlaybackTracksPanel libraryId={item.id} compact />
-                        )}
-                        {allowLocalDownload && item.folder === "torrents" && (
-                          <button
-                            type="button"
-                            onClick={() => saveToPc(item)}
-                            className="btn-ghost w-full justify-center py-1 text-[11px] text-sky-300"
-                            title="Opens a TorBox CDN link (matched on your TorBox account)"
-                          >
-                            <HardDriveDownload className="h-3 w-3" />
-                            TorBox download
-                          </button>
-                        )}
-                        {item.linked ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setLinkMode("relink");
-                                setLinkItem(item);
-                              }}
-                              className="btn-ghost w-full justify-center py-1 text-[11px]"
-                            >
-                              <RefreshCcw className="h-3 w-3" /> Relink
-                            </button>
-                            <button
-                              type="button"
-                              disabled={unlinkBusy === item.id}
-                              onClick={() => unlink(item)}
-                              className="btn-ghost w-full justify-center py-1 text-[11px] text-slate-400"
-                            >
-                              {unlinkBusy === item.id ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <>
-                                  <Unlink className="h-3 w-3" /> Unlink TMDB
-                                </>
-                              )}
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setLinkMode("link");
-                              setLinkItem(item);
-                            }}
-                            className="btn-ghost w-full justify-center py-1 text-[11px]"
-                          >
-                            <Link2 className="h-3 w-3" /> Link to movie/show
-                          </button>
-                        )}
-                        {item.linked && !item.on_watchlist && (
-                          <AddToWatchlistButton
-                            payload={watchlistPayloadFromLibraryItem(item)}
-                            label="Add to watchlist"
-                            className="btn-ghost w-full justify-center py-1 text-[11px] text-amber-300"
-                          />
-                        )}
-                        {!item.linked && (
-                          <AddToWatchlistButton
-                            payload={watchlistPayloadFromLibraryItem(item)}
-                            label="Watchlist"
-                            className="btn-ghost w-full justify-center py-1 text-[11px]"
-                          />
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => addToQueue(item)}
+                          className="btn-ghost flex-1 justify-center py-1 text-[11px]"
+                          title="Add to queue"
+                        >
+                          <ListPlus className="h-3 w-3" /> Queue
+                        </button>
+                        <KebabMenu items={kebabItems} label={`More actions for ${titleFor(item)}`} />
                       </div>
+                      {tracksItemId === item.id && (
+                        <div className="mt-1.5">
+                          <PlaybackTracksPanel libraryId={item.id} compact />
+                        </div>
+                      )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           );
