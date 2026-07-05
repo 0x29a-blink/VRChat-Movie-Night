@@ -1,6 +1,7 @@
 import { Download, Loader2, Pause, Play, SkipForward } from "lucide-react";
 import { api } from "../api";
 import type { AppTab } from "../appNav";
+import { canControlPlayer } from "../capabilities";
 import { sessionStageLabel, stripStateLabel, stripTitle, stripVisible } from "../stripVisibility";
 import type { MovieNightSession, PlayerState, UserInfo } from "../types";
 import { useToast } from "./Toast";
@@ -30,7 +31,7 @@ export function SessionStrip({
 
   if (!stripVisible(tab, session, player, activeDownloads)) return null;
 
-  const canControl = user.capabilities?.can_control_player !== false;
+  const canControl = canControlPlayer(user);
   const title = stripTitle(player, session);
   const stateLabel = stripStateLabel(player);
   const stageLabel = sessionStageLabel(session);
@@ -50,31 +51,19 @@ export function SessionStrip({
 
   return (
     <div className="fixed bottom-0 inset-x-0 z-40 pb-[env(safe-area-inset-bottom)]">
-      {/* Not a real <button>: it hosts nested interactive transport/download
-          buttons, and <button> cannot legally contain <button> children
-          (the browser would auto-close the outer element). A div with
-          role="button" keeps the tap-anywhere-navigates-to-Tonight
-          behavior valid while inner controls remain real buttons. */}
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => onNavigate("tonight")}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onNavigate("tonight");
-          }
-        }}
-        aria-label="Go to Tonight"
-        className="relative flex h-14 w-full cursor-pointer items-center gap-3 border-t border-white/10 bg-ink-900/95 px-3 text-left backdrop-blur md:h-14"
-      >
+      <div className="relative flex h-16 w-full items-center gap-3 border-t border-white/10 bg-ink-900/95 px-3 backdrop-blur md:h-14">
         {duration > 0 && (
           <div className="absolute inset-x-0 bottom-0 h-0.5 bg-white/5">
             <div className="h-full bg-gradient-to-r from-brand-500 to-accent-500" style={{ width: `${pct}%` }} />
           </div>
         )}
 
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onNavigate("tonight")}
+          aria-label="Go to Tonight"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
           <div className="min-w-0">
             <div className="truncate text-sm font-medium text-slate-100" title={title}>
               {title}
@@ -86,7 +75,7 @@ export function SessionStrip({
               )}
             </div>
           </div>
-        </div>
+        </button>
 
         {canControl && (
           <div className="flex shrink-0 items-center gap-1">
@@ -118,7 +107,7 @@ export function SessionStrip({
               e.stopPropagation();
               onNavigate("add");
             }}
-            className="chip shrink-0 gap-1.5 bg-brand-500/20 text-brand-300"
+            className="chip min-h-11 shrink-0 gap-1.5 px-3 bg-brand-500/20 text-brand-300"
             aria-label={`${activeDownloads} active download${activeDownloads === 1 ? "" : "s"}`}
             title="Go to Add Media"
           >

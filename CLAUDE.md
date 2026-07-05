@@ -7,11 +7,11 @@ obs-websocket(4455) → OBS → RTMP(1935) → MediaMTX → HLS(8888) → VRChat
 
 | Purpose | Command | Notes |
 |---|---|---|
-| Backend tests | `cd backend && pytest -q -m "not network"` | 107 passed, 1 known-failing (see Gotchas) |
+| Backend tests | `cd backend && pytest -q -m "not network"` | 195 passed, 1 known-failing (see Gotchas) |
 | Backend lint | `cd backend && ruff check .` | if bare `ruff` isn't on PATH: `./.venv/Scripts/python.exe -m ruff check .` |
 | Frontend build | `cd frontend && npm run build` | tsc -b && vite build |
 | Frontend lint | `cd frontend && npm run lint` | eslint, `--max-warnings 60` |
-| Frontend tests | `cd frontend && npm test` | vitest, 37 tests |
+| Frontend tests | `cd frontend && npm test` | vitest, 93+ tests |
 | Dev (backend+frontend) | `run-dev.cmd` | launches servers — documented, not auto-run by agents |
 | Full stack (+ OBS/MediaMTX) | `start-stack.cmd` | launches servers — documented, not auto-run by agents |
 
@@ -28,11 +28,26 @@ obs-websocket(4455) → OBS → RTMP(1935) → MediaMTX → HLS(8888) → VRChat
 - `models.py`, `db.py` — SQLAlchemy models, engine/session setup, `_migrate_schema()`
 
 `frontend/src/`:
-- `App.tsx` — tab-based SPA shell
+- `App.tsx` — tab-based SPA shell; lazy-loads each tab, lifts session/player/
+  preflight state, renders the persistent `SessionStrip` above the shell
 - `api.ts` — REST client
 - `appRealtime.ts`, `ws.ts` — realtime/WebSocket hooks
+- `appNav.ts` — URL nav state; `AppTab` union (`tonight` is default/home) plus
+  a legacy-alias contract so old links keep working: `downloads`→`add`,
+  `queue`→`tonight`, `checklist`→`tonight`
+- `capabilities.ts` — shared `canControlPlayer(user)` capability check
+- `stripVisibility.ts`, `libraryView.ts` — pure helpers backing the strip and
+  Library search/sort, unit-tested without mounting components
 - `types.ts` — shared TS types
-- `components/` — 30 UI components (Browse, Search, Library, Downloads, Watchlist, Stats, SettingsPage, etc.)
+- `components/` — 34 UI components, notably:
+  - `Tonight.tsx` — default home tab: readiness summary, session cockpit
+    (transport, queue, activity feed), pre-show checklist
+  - `SessionStrip.tsx` — slim bottom strip on every other tab when a session
+    is active or media is playing; now-playing + transport + tap-to-Tonight
+  - `KebabMenu.tsx` — shared "⋯" overflow menu (portaled, keyboard/focus
+    aware); used by Watchlist rows and `DownloadJobCard`
+  - `TabSkeleton.tsx` — per-tab loading skeleton shown while a lazy chunk loads
+  - Browse, Search, Library, Downloads, Watchlist, Stats, SettingsPage, etc.
 - `__tests__/` — vitest specs for pure-logic modules
 
 ## Conventions

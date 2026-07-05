@@ -36,8 +36,9 @@ import {
   Repeat,
   Zap,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { api } from "../api";
+import { canControlPlayer } from "../capabilities";
 import { copyHlsUrl } from "../hlsUrl";
 import { fmtMs } from "../format";
 import type { AppEvent, MovieNightSession, PlayerState, PreflightStatus, QueueItem, QueueSnapshot, UserInfo } from "../types";
@@ -62,13 +63,15 @@ interface Props {
   libraryVersion?: number;
   /** Full preflight response, lifted from App (App already polled this for
    * the nav red-dot count; Tonight reuses the same object instead of a
-   * second independent poll loop). Null until the first fetch resolves. */
+   * second independent poll loop). Null until the first fetch resolves.
+   * PreflightPanel below polls on its own faster (15s) cadence — its
+   * `onUpdate` is wired back to `onPreflight` so App's 30s-polled copy (and
+   * this screen's chip/red-dot) never lags the expanded panel. */
   preflight: PreflightStatus | null;
+  onPreflight: Dispatch<SetStateAction<PreflightStatus | null>>;
   activeDownloads: number;
   onGoToAddMedia: () => void;
 }
-
-const canControlPlayer = (user: UserInfo) => user.capabilities?.can_control_player !== false;
 
 export function Tonight({
   queue,
@@ -81,6 +84,7 @@ export function Tonight({
   onSessionChange,
   libraryVersion,
   preflight,
+  onPreflight,
   activeDownloads,
   onGoToAddMedia,
 }: Props) {
@@ -240,7 +244,7 @@ export function Tonight({
         <button
           type="button"
           onClick={() => setReadinessOpen((o) => !o)}
-          className={`chip ${
+          className={`chip min-h-11 px-3 ${
             readinessReady === undefined
               ? "bg-white/5 text-slate-400"
               : readinessReady
@@ -287,7 +291,7 @@ export function Tonight({
             {readinessOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
             Full checklist
           </button>
-          {readinessOpen && <PreflightPanel />}
+          {readinessOpen && <PreflightPanel onUpdate={onPreflight} />}
         </section>
       )}
 

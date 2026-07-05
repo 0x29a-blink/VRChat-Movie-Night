@@ -260,7 +260,13 @@ function AppShell() {
           <MobileHeader tab={tab} onOpenNav={() => setNavOpen(true)} />
           <PlaybackNotice paused={paused} showGoLiveWarning={showGoLiveWarning} />
 
-          <div className={`flex-1 overflow-y-auto ${showSessionStrip ? "pb-16" : ""}`}>
+          <div
+            className={`flex-1 overflow-y-auto ${
+              showSessionStrip
+                ? "pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-[calc(4rem+env(safe-area-inset-bottom))]"
+                : ""
+            }`}
+          >
             <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
               <Suspense fallback={<TabSkeleton tab={tab} />}>
                 <MainPanels
@@ -293,6 +299,7 @@ function AppShell() {
                   onGoToAddMedia={goToAddMedia}
                   onObs={setObs}
                   preflight={preflight}
+                  onPreflight={setPreflight}
                   activeDownloads={activeDownloads}
                 />
               </Suspense>
@@ -548,6 +555,7 @@ function MainPanels({
   onGoToAddMedia,
   onObs,
   preflight,
+  onPreflight,
   activeDownloads,
 }: {
   tab: Tab;
@@ -573,6 +581,7 @@ function MainPanels({
   onGoToAddMedia: () => void;
   onObs: Dispatch<SetStateAction<ObsState>>;
   preflight: PreflightStatus | null;
+  onPreflight: Dispatch<SetStateAction<PreflightStatus | null>>;
   activeDownloads: number;
 }) {
   switch (tab) {
@@ -589,6 +598,7 @@ function MainPanels({
           onSessionChange={onSessionChange}
           libraryVersion={libVersion + watchlistVersion}
           preflight={preflight}
+          onPreflight={onPreflight}
           activeDownloads={activeDownloads}
           onGoToAddMedia={onGoToAddMedia}
         />

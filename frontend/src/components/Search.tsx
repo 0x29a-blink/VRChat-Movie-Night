@@ -1,4 +1,4 @@
-import { LayoutGrid, Loader2, Search as SearchIcon } from "lucide-react";
+import { Loader2, Search as SearchIcon } from "lucide-react";
 import { useToast } from "./Toast";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
@@ -86,21 +86,23 @@ export function Search({
   onInitialStreamOpenHandled,
   allowLocalDownload = false,
   initialMode = "search",
-  hideModeToggle = false,
   browseSource,
   autoOpenAnime = false,
+  hideSourceToggle = false,
 }: {
   initialStreamLaunch?: StreamLaunch | null;
   onInitialStreamOpenHandled?: () => void;
   allowLocalDownload?: boolean;
   // Plan 026 (Add Media flatten): Downloads.tsx now owns the top-level
   // Search|Browse|Anime|YouTube|M3U8 picker and remounts this component
-  // (via `key`) per segment, so the internal Search/Browse toggle below
-  // becomes redundant chrome for those entry points.
+  // (via `key`), so the internal Search/Browse toggle was deleted entirely
+  // (plan 030 fix J) rather than kept behind a flag no consumer disables.
   initialMode?: MoviesMode;
-  hideModeToggle?: boolean;
   browseSource?: "collections" | "aiostreams";
   autoOpenAnime?: boolean;
+  // Plan 030 (fix A): forwarded to Browse so its internal source switcher
+  // doesn't desync from the top-level segment/URL.
+  hideSourceToggle?: boolean;
 }) {
   const { push: pushToast } = useToast();
   const [mode, setMode] = useState<MoviesMode>(initialMode);
@@ -646,39 +648,6 @@ export function Search({
 
   return (
     <div className="min-w-0 space-y-5">
-      {!hideModeToggle && (
-        <div className="flex gap-2 border-b border-white/5 pb-3">
-          <button
-            type="button"
-            onClick={() => {
-              setMode("search");
-              setError("");
-            }}
-            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${
-              mode === "search" ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            <SearchIcon className="h-4 w-4" />
-            Search
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setMode("browse");
-              setSelected(null);
-              setStreams([]);
-              setError("");
-            }}
-            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${
-              mode === "browse" ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            <LayoutGrid className="h-4 w-4" />
-            Browse
-          </button>
-        </div>
-      )}
-
       {mode === "browse" && (
         <div className={selected ? "hidden" : undefined}>
           <Browse
@@ -686,6 +655,7 @@ export function Search({
             allowLocalDownload={allowLocalDownload}
             initialSource={browseSource}
             autoOpenAnime={autoOpenAnime}
+            hideSourceToggle={hideSourceToggle}
           />
         </div>
       )}

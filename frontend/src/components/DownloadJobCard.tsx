@@ -1,9 +1,9 @@
-import { CheckCircle2, ChevronDown, Loader2, RotateCw, Trash2, X, XCircle, Youtube } from "lucide-react";
+import { CheckCircle2, Loader2, RotateCw, Trash2, X, XCircle, Youtube } from "lucide-react";
 import { Film, Link2 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useState } from "react";
 import { api } from "../api";
 import { fmtBytes } from "../format";
+import { KebabMenu, type KebabMenuItem } from "./KebabMenu";
 import type { Job } from "../types";
 
 const RETRY_MODES: { mode: "auto" | "direct" | "hls" | "ytdlp"; label: string }[] = [
@@ -92,55 +92,6 @@ function LinkSuccessNotice({ job }: { job: Job }) {
   );
 }
 
-function RetryMenu({ jobId }: { jobId: string }) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className="relative">
-      <div className="flex items-center">
-        <button
-          onClick={() => api.restartDownload(jobId)}
-          className="rounded-l-lg p-2 text-slate-400 hover:bg-white/10 hover:text-brand-300"
-          title="Restart"
-        >
-          <RotateCw className="h-4 w-4" />
-        </button>
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className="rounded-r-lg p-1 text-slate-400 hover:bg-white/10 hover:text-brand-300"
-          title="Retry as…"
-        >
-          <ChevronDown className="h-3 w-3" />
-        </button>
-      </div>
-      {open && (
-        <>
-          <button
-            type="button"
-            className="fixed inset-0 z-[100]"
-            aria-label="Close menu"
-            onClick={() => setOpen(false)}
-          />
-          <div className="absolute right-0 z-[110] mt-1 w-40 overflow-hidden rounded-lg border border-white/10 bg-slate-900 shadow-xl">
-            {RETRY_MODES.map((r) => (
-              <button
-                key={r.mode}
-                onClick={() => {
-                  setOpen(false);
-                  api.restartDownload(jobId, r.mode);
-                }}
-                className="block w-full px-3 py-2 text-left text-xs text-slate-300 hover:bg-white/10"
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
 export function DownloadJobCard({
   job,
   onRemoved,
@@ -150,6 +101,33 @@ export function DownloadJobCard({
 }) {
   const Icon = TYPE_ICON[job.type] || Link2;
   const active = isActive(job);
+
+  const removeJob = async () => {
+    onRemoved?.(job.id);
+    try {
+      await api.removeDownload(job.id);
+    } catch {
+      /* WS download_removed reconciles; refresh if remove failed */
+    }
+  };
+
+  // Plan 030 (fix L): consolidates the old hand-rolled Restart/retry-as split
+  // button + separate Remove button into one KebabMenu, keeping identical
+  // items/conditions (retry-as variants only for failed jobs).
+  const kebabItems: KebabMenuItem[] = job.status === "failed"
+    ? [
+        { label: "Restart", icon: <RotateCw className="h-3.5 w-3.5" />, onClick: () => api.restartDownload(job.id) },
+        ...RETRY_MODES.filter((r) => r.mode !== "auto").map((r) => ({
+          label: r.label,
+          icon: <RotateCw className="h-3.5 w-3.5" />,
+          onClick: () => api.restartDownload(job.id, r.mode),
+        })),
+        { label: "Remove", icon: <Trash2 className="h-3.5 w-3.5" />, onClick: removeJob, destructive: true },
+      ]
+    : [
+        { label: "Restart", icon: <RotateCw className="h-3.5 w-3.5" />, onClick: () => api.restartDownload(job.id) },
+        { label: "Remove", icon: <Trash2 className="h-3.5 w-3.5" />, onClick: removeJob, destructive: true },
+      ];
 
   return (
     <div className="card p-4">
@@ -187,33 +165,7 @@ export function DownloadJobCard({
               <X className="h-4 w-4" />
             </button>
           ) : (
-            <>
-              {job.status === "failed" ? (
-                <RetryMenu jobId={job.id} />
-              ) : (
-                <button
-                  onClick={() => api.restartDownload(job.id)}
-                  className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-brand-300"
-                  title="Restart"
-                >
-                  <RotateCw className="h-4 w-4" />
-                </button>
-              )}
-              <button
-                onClick={async () => {
-                  onRemoved?.(job.id);
-                  try {
-                    await api.removeDownload(job.id);
-                  } catch {
-                    /* WS download_removed reconciles; refresh if remove failed */
-                  }
-                }}
-                className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-red-300"
-                title="Remove"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </>
+            <KebabMenu items={kebabItems} label={`More actions for ${job.title}`} />
           )}
         </div>
       </div>

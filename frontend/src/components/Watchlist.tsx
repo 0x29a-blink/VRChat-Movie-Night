@@ -1676,7 +1676,7 @@ export function Watchlist({
         );
       } else {
         pushToast(`Added ${r.added} title${r.added === 1 ? "" : "s"} to queue`, "success", onGoToQueue
-          ? { label: "Open Queue", onClick: onGoToQueue }
+          ? { label: "Open Tonight", onClick: onGoToQueue }
           : undefined);
       }
     } catch (err: unknown) {
@@ -1691,7 +1691,7 @@ export function Watchlist({
     try {
       const r = await api.watchlistPlayNextUnwatched(selectedGroupId);
       pushToast(`Now playing: ${r.title}`, "success", onGoToQueue
-        ? { label: "Open Queue", onClick: onGoToQueue }
+        ? { label: "Open Tonight", onClick: onGoToQueue }
         : undefined);
       if (!obs.connected) {
         pushToast("OBS is offline — friends won't see playback in VRChat.", "error");

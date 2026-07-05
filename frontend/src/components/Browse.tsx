@@ -411,6 +411,7 @@ export function Browse({
   allowLocalDownload = false,
   initialSource = "collections",
   autoOpenAnime = false,
+  hideSourceToggle = false,
 }: {
   onPickTitle: (r: SearchResult) => void;
   allowLocalDownload?: boolean;
@@ -418,6 +419,10 @@ export function Browse({
   // directly on a source, e.g. Anime, without the user re-clicking here.
   initialSource?: BrowseSource;
   autoOpenAnime?: boolean;
+  // Plan 030 (fix A): when the top-level segment already pins the source
+  // (Downloads.tsx's Browse/Anime segments), hide this internal switcher so
+  // it can't desync from the URL/segment.
+  hideSourceToggle?: boolean;
 }) {
   const { push: pushToast } = useToast();
   const [source, setSource] = useState<BrowseSource>(initialSource);
@@ -627,32 +632,34 @@ export function Browse({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => setSource("collections")}
-          className={source === "collections" ? "btn-primary" : "btn-ghost border border-white/10"}
-        >
-          <Layers className="mr-1.5 inline h-4 w-4" />
-          TMDB Collections
-        </button>
-        <button
-          type="button"
-          onClick={() => setSource("aiostreams")}
-          className={source === "aiostreams" ? "btn-primary" : "btn-ghost border border-white/10"}
-        >
-          <Sparkles className="mr-1.5 inline h-4 w-4" />
-          AIOStreams catalogs
-        </button>
-        <button
-          type="button"
-          onClick={openAnimeBrowse}
-          className="btn-ghost border border-violet-500/30 text-violet-200"
-          title="Open anime / Kitsu / MAL catalogs from your manifest"
-        >
-          Anime
-        </button>
-      </div>
+      {!hideSourceToggle && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setSource("collections")}
+            className={source === "collections" ? "btn-primary" : "btn-ghost border border-white/10"}
+          >
+            <Layers className="mr-1.5 inline h-4 w-4" />
+            TMDB Collections
+          </button>
+          <button
+            type="button"
+            onClick={() => setSource("aiostreams")}
+            className={source === "aiostreams" ? "btn-primary" : "btn-ghost border border-white/10"}
+          >
+            <Sparkles className="mr-1.5 inline h-4 w-4" />
+            AIOStreams catalogs
+          </button>
+          <button
+            type="button"
+            onClick={openAnimeBrowse}
+            className="btn-ghost border border-violet-500/30 text-violet-200"
+            title="Open anime / Kitsu / MAL catalogs from your manifest"
+          >
+            Anime
+          </button>
+        </div>
+      )}
 
       {error && <div className="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</div>}
 

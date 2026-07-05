@@ -40,7 +40,7 @@ export function PlaybackProvider({
 
   const pushWithQueueAction = useCallback(
     (message: string, kind: ToastKind = "success") => {
-      pushToast(message, kind, { label: "Open Queue", onClick: onGoToQueue });
+      pushToast(message, kind, { label: "Open Tonight", onClick: onGoToQueue });
     },
     [pushToast, onGoToQueue]
   );

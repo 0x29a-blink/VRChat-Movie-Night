@@ -81,15 +81,17 @@ export function Downloads({
       </div>
 
       <div className="card overflow-x-auto overflow-y-visible">
-        <div className="flex border-b border-white/5">
+        <div className="flex flex-wrap border-b border-white/5">
           {SOURCES.map((s) => {
             const Icon = s.icon;
+            const active = source === s.id;
             return (
               <button
                 key={s.id}
                 onClick={() => selectSource(s.id)}
-                className={`flex flex-1 items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
-                  source === s.id ? "bg-white/5 text-white" : "text-slate-400 hover:text-slate-200"
+                aria-current={active ? "page" : undefined}
+                className={`flex grow basis-[30%] items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors sm:basis-0 sm:flex-1 ${
+                  active ? "bg-white/5 text-white" : "text-slate-400 hover:text-slate-200"
                 }`}
               >
                 <Icon className="h-4 w-4" />
@@ -105,7 +107,6 @@ export function Downloads({
             <Search
               key="search"
               initialMode="search"
-              hideModeToggle
               initialStreamLaunch={initialStreamLaunch}
               onInitialStreamOpenHandled={onInitialStreamOpenHandled}
               allowLocalDownload={canLocalDownload(user)}
@@ -115,7 +116,7 @@ export function Downloads({
             <Search
               key="browse"
               initialMode="browse"
-              hideModeToggle
+              hideSourceToggle
               browseSource="collections"
               allowLocalDownload={canLocalDownload(user)}
             />
@@ -124,7 +125,7 @@ export function Downloads({
             <Search
               key="anime"
               initialMode="browse"
-              hideModeToggle
+              hideSourceToggle
               browseSource="aiostreams"
               autoOpenAnime
               allowLocalDownload={canLocalDownload(user)}

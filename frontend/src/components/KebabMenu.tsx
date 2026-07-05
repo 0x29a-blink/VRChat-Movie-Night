@@ -27,6 +27,7 @@ export function KebabMenu({
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -50,10 +51,34 @@ export function KebabMenu({
     };
   }, [open]);
 
+  // Focus the first menu item when the menu opens; return focus to the
+  // trigger whenever it closes (Escape, item activation, outside click).
+  useEffect(() => {
+    if (open) {
+      itemRefs.current[0]?.focus();
+    } else {
+      buttonRef.current?.focus();
+    }
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        setOpen(false);
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const enabled = itemRefs.current
+          .map((el, idx) => ({ el, idx }))
+          .filter(({ el }) => el && !el.disabled);
+        if (enabled.length === 0) return;
+        const activeIdx = enabled.findIndex(({ el }) => el === document.activeElement);
+        const delta = e.key === "ArrowDown" ? 1 : -1;
+        const nextPos = activeIdx === -1 ? 0 : (activeIdx + delta + enabled.length) % enabled.length;
+        enabled[nextPos].el?.focus();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -77,7 +102,7 @@ export function KebabMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         title={label}
-        className={`btn-ghost shrink-0 px-1 py-0.5 text-slate-400 ${className}`}
+        className={`btn-ghost flex min-h-11 min-w-11 shrink-0 items-center justify-center px-1 py-0.5 text-slate-400 ${className}`}
       >
         <MoreVertical className="h-3.5 w-3.5" />
         <span className="sr-only">{label}</span>
@@ -103,6 +128,9 @@ export function KebabMenu({
               {items.map((item, idx) => (
                 <button
                   key={idx}
+                  ref={(el) => {
+                    itemRefs.current[idx] = el;
+                  }}
                   type="button"
                   role="menuitem"
                   disabled={item.disabled}
