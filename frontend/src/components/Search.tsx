@@ -353,7 +353,8 @@ export function Search({
     setSelected(r);
     setStreams([]);
     setStreamsFetched(false);
-    if (!fromBrowse) setResults([]);
+    // Keep `results` — the grid is hidden while a title is selected and
+    // "Back to results" must return to the list, not an empty page.
     setSeasons([]);
     setSeason(opts?.season);
     setEpisode(opts?.episode);

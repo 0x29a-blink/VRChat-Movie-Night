@@ -750,26 +750,30 @@ export function Browse({
               {collections.length > 0 && (
                 <div className="grid gap-2 sm:grid-cols-2">
                   {collections.map((c) => (
-                    <button
-                      key={c.collection_id}
-                      onClick={() => openCollection(c.collection_id)}
-                      className="card flex gap-3 p-3 text-left hover:bg-white/5"
-                    >
-                      {c.poster ? (
-                        <img src={c.poster} alt="" className="h-16 w-12 rounded object-cover" />
-                      ) : (
-                        <div className="flex h-16 w-12 items-center justify-center rounded bg-ink-800 text-xs text-slate-600">
-                          —
-                        </div>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="font-medium">{c.name}</div>
-                        <p className="mt-1 line-clamp-2 text-xs text-slate-500">{c.overview}</p>
-                        <div className="mt-2" onClick={(e) => e.stopPropagation()}>
-                          <AddToWatchlistButton payload={watchlistFromCollection(c)} label="Add collection" />
-                        </div>
+                    /* The open target and the watchlist action are sibling
+                       buttons — nesting them was invalid DOM. */
+                    <div key={c.collection_id} className="card flex gap-3 p-3 transition-colors hover:bg-white/5">
+                      <button
+                        type="button"
+                        onClick={() => openCollection(c.collection_id)}
+                        className="flex min-w-0 flex-1 gap-3 text-left"
+                      >
+                        {c.poster ? (
+                          <img src={c.poster} alt="" className="h-16 w-12 shrink-0 rounded object-cover" />
+                        ) : (
+                          <span className="flex h-16 w-12 shrink-0 items-center justify-center rounded bg-ink-800 text-xs text-slate-600">
+                            —
+                          </span>
+                        )}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium">{c.name}</span>
+                          <span className="mt-1 block line-clamp-2 text-xs text-slate-500">{c.overview}</span>
+                        </span>
+                      </button>
+                      <div className="flex shrink-0 flex-col justify-end">
+                        <AddToWatchlistButton payload={watchlistFromCollection(c)} label="Add collection" />
                       </div>
-                    </button>
+                    </div>
                   ))}
                 </div>
               )}
