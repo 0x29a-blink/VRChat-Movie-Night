@@ -26,8 +26,8 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
     <div className="flex h-full items-center justify-center p-6">
       <div className="card w-full max-w-sm p-8 shadow-glow">
         <div className="mb-6 flex flex-col items-center text-center">
-          <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-brand-500 to-accent-500 shadow-glow">
-            <Clapperboard className="h-7 w-7 text-white" />
+          <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-brand-500">
+            <Clapperboard className="h-7 w-7 text-brand-ink" />
           </div>
           <h1 className="text-xl font-semibold">VRChat Movie Night</h1>
           <p className="mt-1 text-sm text-slate-400">Sign in with your account</p>

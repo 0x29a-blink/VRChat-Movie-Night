@@ -646,7 +646,7 @@ export function Browse({
           <button
             type="button"
             onClick={openAnimeBrowse}
-            className="btn-ghost border border-violet-500/30 text-violet-200"
+            className="btn-ghost border border-brand-500/30 text-brand-400"
             title="Open anime / Kitsu / MAL catalogs from your manifest"
           >
             Anime
@@ -828,8 +828,8 @@ export function Browse({
                     onClick={openAnimeBrowse}
                     className={`chip ${
                       catalogFilter === "anime"
-                        ? "bg-violet-500/25 text-violet-200"
-                        : "bg-white/5 text-slate-300 hover:bg-violet-500/20 hover:text-violet-200"
+                        ? "bg-brand-500/25 text-brand-400"
+                        : "bg-white/5 text-slate-300 hover:bg-brand-500/20 hover:text-brand-400"
                     }`}
                   >
                     Anime

@@ -8,6 +8,7 @@ import { MediaMtxSettings } from "./MediaMtxSettings";
 import { StreamQualitySettings } from "./StreamQualitySettings";
 import { ConfirmModal, PromptModal } from "./ConfirmModal";
 import { useToast } from "./Toast";
+import { THEMES, getStoredTheme, setTheme, type ThemeId } from "../theme";
 
 const DEFAULT_HLS_REL_PATH = "live/vrstream/index.m3u8";
 const OBS_RTMP_SERVER_URL = "rtmp://localhost:1935/live";
@@ -424,15 +425,60 @@ function HlsCopyBlock({
   );
 }
 
-type SettingsSection = "account" | "host" | "providers" | "users" | "backup";
+type SettingsSection = "account" | "appearance" | "host" | "providers" | "users" | "backup";
 
 const ADMIN_SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: "account", label: "Account" },
+  { id: "appearance", label: "Appearance" },
   { id: "host", label: "Host setup" },
   { id: "providers", label: "Providers" },
   { id: "users", label: "Users" },
   { id: "backup", label: "Backup" },
 ];
+
+function AppearanceSection() {
+  const [theme, setThemeState] = useState<ThemeId>(getStoredTheme);
+
+  const pick = (id: ThemeId) => {
+    setTheme(id);
+    setThemeState(id);
+  };
+
+  return (
+    <div className="card space-y-4 p-5">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">Theme</h2>
+      <p className="text-xs text-slate-500">Applies to this browser only — each member picks their own.</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {THEMES.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => pick(t.id)}
+            aria-pressed={theme === t.id}
+            className={`flex items-center gap-3 rounded-xl border p-3 text-left transition-colors ${
+              theme === t.id
+                ? "border-brand-500/70 bg-brand-500/10 ring-1 ring-brand-500/40"
+                : "border-white/10 bg-white/5 hover:bg-white/10"
+            }`}
+          >
+            <span
+              className="grid h-10 w-14 shrink-0 grid-cols-2 overflow-hidden rounded-lg border border-white/10"
+              aria-hidden
+            >
+              {t.swatch.map((c, i) => (
+                <span key={i} style={{ background: c }} />
+              ))}
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-slate-100">{t.label}</span>
+              <span className="block truncate text-xs text-slate-500">{t.description}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function SettingsTabBar({
   section,
@@ -750,6 +796,8 @@ export function SettingsPage({ user }: { user: UserInfo }) {
       {section === "account" && (
         <PasswordSection password={pw} message={pwMsg} onPasswordChange={setPw} onSubmit={changePw} />
       )}
+
+      {section === "appearance" && <AppearanceSection />}
 
       {section === "host" && (
         <>

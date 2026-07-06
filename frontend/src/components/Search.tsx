@@ -716,7 +716,7 @@ export function Search({
               <h3 className="text-lg font-semibold">
                 {selected.title}{" "}
                 {isAnimeTitle(selected) && (
-                  <span className="chip bg-violet-500/15 text-violet-300">AIOStreams</span>
+                  <span className="chip bg-brand-500/15 text-brand-400">AIOStreams</span>
                 )}{" "}
                 <span className="text-slate-500">{selected.year}</span>
               </h3>

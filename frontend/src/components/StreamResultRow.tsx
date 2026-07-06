@@ -50,13 +50,13 @@ function langTagClass(tag: string): string {
     case "Dub":
       return "bg-sky-500/15 text-sky-300";
     case "Sub":
-      return "bg-violet-500/15 text-violet-300";
+      return "bg-teal-500/15 text-teal-300";
     case "Dual":
-      return "bg-indigo-500/15 text-indigo-300";
+      return "bg-cyan-500/15 text-cyan-300";
     case "Hardsub":
       return "bg-rose-500/15 text-rose-300";
     default:
-      return "bg-teal-500/15 text-teal-300";
+      return "bg-white/10 text-slate-300";
   }
 }
 
@@ -109,7 +109,7 @@ function StreamMetaBadges({ stream }: { stream: StreamResult }) {
         <span className="chip bg-white/5 text-slate-400">{stream.provider}</span>
       )}
       {stream.codec && <span className="chip bg-white/5 text-slate-400">{stream.codec}</span>}
-      {stream.hdr && <span className="chip bg-fuchsia-500/15 text-fuchsia-300">{stream.hdr}</span>}
+      {stream.hdr && <span className="chip bg-white/10 text-slate-200">{stream.hdr}</span>}
       {stream.source && <span className="chip bg-white/5 text-slate-400">{stream.source}</span>}
       {stream.indexer && <span className="chip bg-white/5 text-slate-400">{stream.indexer}</span>}
       {stream.network && <span className="chip bg-white/5 text-slate-400">{stream.network}</span>}

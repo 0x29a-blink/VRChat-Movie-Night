@@ -54,7 +54,7 @@ export function SessionStrip({
       <div className="relative flex h-16 w-full items-center gap-3 border-t border-white/10 bg-ink-900/95 px-3 backdrop-blur md:h-14">
         {duration > 0 && (
           <div className="absolute inset-x-0 bottom-0 h-0.5 bg-white/5">
-            <div className="h-full bg-gradient-to-r from-brand-500 to-accent-500" style={{ width: `${pct}%` }} />
+            <div className="h-full bg-brand-500" style={{ width: `${pct}%` }} />
           </div>
         )}
 

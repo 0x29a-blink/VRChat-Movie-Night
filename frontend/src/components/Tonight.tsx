@@ -331,7 +331,7 @@ export function Tonight({
                 className="group h-2.5 w-full cursor-pointer overflow-hidden rounded-full bg-white/5"
               >
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-brand-500 to-accent-500"
+                  className="h-full rounded-full bg-brand-500"
                   style={{ width: `${pct}%` }}
                 />
               </div>
@@ -351,7 +351,7 @@ export function Tonight({
           <button
             onClick={act(cur ? "Toggle playback" : "Play", () => (cur ? api.toggle() : api.play()))}
             disabled={!canControl}
-            className="grid h-14 w-14 place-items-center rounded-full bg-brand-500 text-white shadow-glow transition-colors hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
+            className="grid h-14 w-14 place-items-center rounded-full bg-brand-500 text-brand-ink transition-colors hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
             title={!canControl ? "You don't have permission to control playback" : playing ? "Pause" : "Play"}
           >
             {playing ? <Pause className="h-6 w-6" /> : <Play className="h-6 w-6 translate-x-0.5" />}

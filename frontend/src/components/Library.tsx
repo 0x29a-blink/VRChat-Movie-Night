@@ -317,7 +317,7 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
                         </div>
                       )}
                       {libraryLinkLabel(item) && (
-                        <span className="absolute left-1.5 top-1.5 chip bg-brand-500/80 text-white">
+                        <span className="absolute left-1.5 top-1.5 chip bg-brand-500/80 text-brand-ink">
                           {libraryLinkLabel(item)}
                         </span>
                       )}

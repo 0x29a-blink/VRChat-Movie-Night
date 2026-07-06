@@ -50,10 +50,10 @@ function JobProgress({ job }: { job: Job }) {
     <div className="mt-3">
       <div className="h-2 w-full overflow-hidden rounded-full bg-white/5">
         {indeterminate ? (
-          <div className="h-full w-1/3 animate-pulse rounded-full bg-gradient-to-r from-brand-500 to-accent-500" />
+          <div className="h-full w-1/3 animate-pulse rounded-full bg-brand-500" />
         ) : (
           <div
-            className="h-full rounded-full bg-gradient-to-r from-brand-500 to-accent-500 transition-all duration-300"
+            className="h-full rounded-full bg-brand-500 transition-all duration-300"
             style={{ width: `${job.status === "queued" ? 0 : job.percent}%` }}
           />
         )}

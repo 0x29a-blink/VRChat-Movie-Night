@@ -360,8 +360,8 @@ function AppSidebar({
       }`}
     >
       <div className="mb-8 flex items-center gap-3 px-2">
-        <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-brand-500 to-accent-500 shadow-glow">
-          <Clapperboard className="h-5 w-5 text-white" />
+        <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand-500">
+          <Clapperboard className="h-5 w-5 text-brand-ink" />
         </div>
         <div>
           <div className="text-sm font-semibold leading-tight">Movie Night</div>

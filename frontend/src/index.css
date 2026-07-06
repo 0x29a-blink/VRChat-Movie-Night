@@ -2,8 +2,100 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+  Theme tokens. Every color in tailwind.config.js resolves to one of these
+  variables, as RGB triplets so alpha modifiers keep working.
+  Scales:
+    --ink-*   surfaces (950 page … 500 lightest structural gray)
+    --brand-* the single accent hue; --brand-ink is text placed ON the accent
+    --tx-*    text (100 brightest … 600 faintest); mapped onto Tailwind's slate
+  The default theme is Velvet; alternatives are selected via
+  <html data-theme="..."> (see src/theme.ts and Settings → Appearance).
+*/
 :root {
   color-scheme: dark;
+
+  /* Velvet — curtain-dark warm surfaces, brass-gold accent */
+  --ink-950: 24 17 20;
+  --ink-900: 27 20 23;
+  --ink-850: 32 24 28;
+  --ink-800: 42 31 35;
+  --ink-700: 54 42 47;
+  --ink-600: 74 58 66;
+  --ink-500: 96 76 86;
+  --brand-400: 224 180 110;
+  --brand-500: 213 162 83;
+  --brand-600: 192 141 58;
+  --brand-ink: 36 21 3;
+  --tx-100: 245 239 237;
+  --tx-200: 240 233 231;
+  --tx-300: 217 205 201;
+  --tx-400: 184 166 162;
+  --tx-500: 151 132 127;
+  --tx-600: 110 95 92;
+}
+
+[data-theme="graphite"] {
+  /* Graphite — pure grayscale, white primary actions */
+  --ink-950: 18 18 18;
+  --ink-900: 21 21 21;
+  --ink-850: 26 26 26;
+  --ink-800: 34 34 34;
+  --ink-700: 43 43 43;
+  --ink-600: 58 58 58;
+  --ink-500: 78 78 78;
+  --brand-400: 255 255 255;
+  --brand-500: 240 240 240;
+  --brand-600: 219 219 219;
+  --brand-ink: 22 22 22;
+  --tx-100: 245 245 245;
+  --tx-200: 237 237 237;
+  --tx-300: 212 212 212;
+  --tx-400: 163 163 163;
+  --tx-500: 138 138 138;
+  --tx-600: 99 99 99;
+}
+
+[data-theme="ember"] {
+  /* Ember — cool graphite surfaces, burnt-orange accent */
+  --ink-950: 20 22 26;
+  --ink-900: 23 26 31;
+  --ink-850: 27 31 37;
+  --ink-800: 35 40 48;
+  --ink-700: 43 49 59;
+  --ink-600: 57 65 77;
+  --ink-500: 77 87 101;
+  --brand-400: 232 137 99;
+  --brand-500: 220 103 64;
+  --brand-600: 196 85 47;
+  --brand-ink: 32 11 4;
+  --tx-100: 242 243 245;
+  --tx-200: 233 234 238;
+  --tx-300: 205 209 216;
+  --tx-400: 166 173 184;
+  --tx-500: 143 150 162;
+  --tx-600: 102 112 128;
+}
+
+[data-theme="projector"] {
+  /* Projector — warm true-neutral charcoal, tungsten-amber accent */
+  --ink-950: 19 18 17;
+  --ink-900: 22 21 20;
+  --ink-850: 27 25 24;
+  --ink-800: 35 32 27;
+  --ink-700: 44 40 34;
+  --ink-600: 59 54 46;
+  --ink-500: 79 72 61;
+  --brand-400: 232 180 95;
+  --brand-500: 221 156 51;
+  --brand-600: 197 136 36;
+  --brand-ink: 33 19 2;
+  --tx-100: 242 237 229;
+  --tx-200: 237 233 226;
+  --tx-300: 213 207 195;
+  --tx-400: 176 167 152;
+  --tx-500: 156 148 136;
+  --tx-600: 111 105 95;
 }
 
 html,
@@ -14,9 +106,8 @@ body,
 
 body {
   margin: 0;
-  background: radial-gradient(1200px 800px at 80% -10%, rgba(91, 124, 250, 0.12), transparent 60%),
-    radial-gradient(1000px 700px at -10% 10%, rgba(139, 92, 246, 0.1), transparent 55%), #070a12;
-  color: #e6e9f2;
+  background: rgb(var(--ink-950));
+  color: rgb(var(--tx-200));
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -24,14 +115,14 @@ body {
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #27314a transparent;
+  scrollbar-color: rgb(var(--ink-600)) transparent;
 }
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #27314a;
+  background: rgb(var(--ink-600));
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: padding-box;
@@ -39,14 +130,14 @@ body {
 
 @layer components {
   .card {
-    @apply rounded-2xl border border-white/5 bg-ink-850/70 backdrop-blur-sm;
+    @apply rounded-2xl border border-white/5 bg-ink-850;
   }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium
       transition-colors disabled:cursor-not-allowed disabled:opacity-40;
   }
   .btn-primary {
-    @apply btn bg-brand-500 text-white hover:bg-brand-600;
+    @apply btn bg-brand-500 text-brand-ink hover:bg-brand-600;
   }
   .btn-ghost {
     @apply btn bg-white/5 text-slate-200 hover:bg-white/10;
