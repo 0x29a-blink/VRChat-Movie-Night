@@ -9,6 +9,20 @@ export const LIBRARY_SORT_OPTIONS = [
 
 export type LibrarySort = (typeof LIBRARY_SORT_OPTIONS)[number]["value"];
 
+export const LIBRARY_FILTER_OPTIONS = [
+  { value: "all", label: "All videos" },
+  { value: "needs_link", label: "Needs linking" },
+  { value: "not_on_watchlist", label: "Not on watchlist" },
+] as const;
+
+export type LibraryFilter = (typeof LIBRARY_FILTER_OPTIONS)[number]["value"];
+
+function matchesFilter(item: LibraryItem, filter: LibraryFilter): boolean {
+  if (filter === "needs_link") return !item.linked;
+  if (filter === "not_on_watchlist") return !!item.linked && item.on_watchlist === false;
+  return true;
+}
+
 function titleFor(item: LibraryItem): string {
   return item.display_title || item.title;
 }
@@ -32,14 +46,19 @@ function sortItems(items: LibraryItem[], sort: LibrarySort): LibraryItem[] {
 }
 
 /**
- * Filters items by title/filename (case-insensitive substring) then sorts.
- * Pure — used per-folder-section by Library.tsx so grouping is preserved by
- * the caller (this only filters/sorts within a single section's items).
+ * Filters items by title/filename (case-insensitive substring) and state
+ * filter (needs linking / not on watchlist), then sorts. Pure — used
+ * per-folder-section by Library.tsx so grouping is preserved by the caller
+ * (this only filters/sorts within a single section's items).
  */
 export function filterAndSortLibrary(
   items: LibraryItem[],
   query: string,
-  sort: LibrarySort
+  sort: LibrarySort,
+  filter: LibraryFilter = "all"
 ): LibraryItem[] {
-  return sortItems(items.filter((item) => matchesQuery(item, query)), sort);
+  return sortItems(
+    items.filter((item) => matchesQuery(item, query) && matchesFilter(item, filter)),
+    sort
+  );
 }

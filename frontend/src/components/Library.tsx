@@ -20,7 +20,13 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { fmtBytes, fmtDuration } from "../format";
 import { canLocalDownload, saveLibraryItemToPc } from "../localDownload";
-import { filterAndSortLibrary, LIBRARY_SORT_OPTIONS, type LibrarySort } from "../libraryView";
+import {
+  filterAndSortLibrary,
+  LIBRARY_FILTER_OPTIONS,
+  LIBRARY_SORT_OPTIONS,
+  type LibraryFilter,
+  type LibrarySort,
+} from "../libraryView";
 import type { LibraryItem, UserInfo } from "../types";
 import { useWatchlistAdd } from "../watchlistAddModal";
 import { ConfirmModal } from "./ConfirmModal";
@@ -56,6 +62,7 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
   const [tracksItemId, setTracksItemId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<LibrarySort>("recent");
+  const [filter, setFilter] = useState<LibraryFilter>("all");
 
   const load = () => {
     setError("");
@@ -174,10 +181,10 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
   const filteredData = useMemo(() => {
     const out: Record<string, LibraryItem[]> = {};
     for (const [key, items] of Object.entries(data)) {
-      out[key] = filterAndSortLibrary(items, query, sort);
+      out[key] = filterAndSortLibrary(items, query, sort, filter);
     }
     return out;
-  }, [data, query, sort]);
+  }, [data, query, sort, filter]);
   const filteredTotal = Object.values(filteredData).reduce((n, arr) => n + arr.length, 0);
 
   return (
@@ -203,6 +210,18 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
               className="input w-full !pl-8"
             />
           </div>
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value as LibraryFilter)}
+            className="input sm:w-44"
+            title="Filter by link/watchlist state"
+          >
+            {LIBRARY_FILTER_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
           <select
             value={sort}
             onChange={(e) => setSort(e.target.value as LibrarySort)}
@@ -234,7 +253,13 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
         </div>
       ) : filteredTotal === 0 ? (
         <div className="card p-12 text-center text-slate-500">
-          No videos match “{query}”.
+          {query.trim()
+            ? `No videos match “${query}”.`
+            : filter === "needs_link"
+              ? "Everything is linked — nothing needs attention."
+              : filter === "not_on_watchlist"
+                ? "Every linked video is on the watchlist."
+                : "No videos match your filters."}
         </div>
       ) : (
         Object.entries(FOLDER_META).map(([key, meta]) => {
@@ -308,9 +333,24 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
 
                   return (
                   <div key={item.id} className="card overflow-hidden">
-                    <div className="relative aspect-video w-full bg-ink-800">
+                    <div className="relative aspect-video w-full overflow-hidden bg-ink-800">
                       {posterFor(item) ? (
-                        <img src={posterFor(item)} alt="" className="h-full w-full object-cover" />
+                        <>
+                          {/* Blurred cover copy fills the 16:9 slot; the real
+                              art renders uncropped on top, so portrait posters
+                              keep their heads. */}
+                          <img
+                            src={posterFor(item)}
+                            alt=""
+                            aria-hidden
+                            className="absolute inset-0 h-full w-full scale-110 object-cover opacity-35 blur-lg"
+                          />
+                          <img
+                            src={posterFor(item)}
+                            alt=""
+                            className="relative h-full w-full object-contain"
+                          />
+                        </>
                       ) : (
                         <div className="grid h-full place-items-center text-slate-600">
                           <Film className="h-8 w-8" />
@@ -319,6 +359,11 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
                       {libraryLinkLabel(item) && (
                         <span className="absolute left-1.5 top-1.5 chip bg-brand-500/80 text-brand-ink">
                           {libraryLinkLabel(item)}
+                        </span>
+                      )}
+                      {!item.linked && (
+                        <span className="absolute left-1.5 top-1.5 chip border border-amber-500/40 bg-ink-950/70 text-amber-300">
+                          Unlinked
                         </span>
                       )}
                       {item.linked && item.on_watchlist === false && (

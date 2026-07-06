@@ -93,6 +93,43 @@ describe("filterAndSortLibrary — sort orders", () => {
   });
 });
 
+describe("filterAndSortLibrary — state filters", () => {
+  const items = [
+    makeItem({ id: 1, linked: true, on_watchlist: true }),
+    makeItem({ id: 2, linked: true, on_watchlist: false }),
+    makeItem({ id: 3, linked: false }),
+    makeItem({ id: 4 }), // linked undefined — treated as not linked
+  ];
+
+  it("'all' keeps everything", () => {
+    expect(filterAndSortLibrary(items, "", "recent", "all")).toHaveLength(4);
+  });
+
+  it("defaults to 'all' when the filter argument is omitted", () => {
+    expect(filterAndSortLibrary(items, "", "recent")).toHaveLength(4);
+  });
+
+  it("'needs_link' keeps only unlinked items", () => {
+    const out = filterAndSortLibrary(items, "", "recent", "needs_link");
+    expect(out.map((i) => i.id)).toEqual([4, 3]);
+  });
+
+  it("'not_on_watchlist' keeps only linked items explicitly off the watchlist", () => {
+    const out = filterAndSortLibrary(items, "", "recent", "not_on_watchlist");
+    expect(out.map((i) => i.id)).toEqual([2]);
+  });
+
+  it("composes with the text query", () => {
+    const mixed = [
+      makeItem({ id: 1, title: "Show A", linked: false }),
+      makeItem({ id: 2, title: "Show B", linked: true }),
+      makeItem({ id: 3, title: "Other", linked: false }),
+    ];
+    const out = filterAndSortLibrary(mixed, "show", "recent", "needs_link");
+    expect(out.map((i) => i.id)).toEqual([1]);
+  });
+});
+
 describe("filterAndSortLibrary — stable section grouping input/output", () => {
   it("preserves array length and identity of items across filter+sort (no mutation of caller's array)", () => {
     const items = [makeItem({ id: 1 }), makeItem({ id: 2 })];
