@@ -15,6 +15,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
+import { readCache, writeCache } from "../swrCache";
+import { WATCHLIST_GROUPS_KEY, type WatchlistGroupsResponse } from "../watchlistCache";
 import type {
   StatsNeedsRatingUser,
   StatsProfileTitle,
@@ -624,14 +626,21 @@ function TimelineSparkline({ counts }: { counts: { date: string; count: number }
   );
 }
 
+const TIMELINE_CACHE_KEY = "stats:timeline:90";
+
 function TimelineSection({ open, onToggle }: { open: boolean; onToggle: (next: boolean) => void }) {
-  const [timeline, setTimeline] = useState<StatsTimeline | null>(null);
+  const [timeline, setTimeline] = useState<StatsTimeline | null>(
+    () => readCache<StatsTimeline>(TIMELINE_CACHE_KEY) ?? null
+  );
   const [error, setError] = useState("");
 
   useEffect(() => {
     api
       .getStatsTimeline(90)
-      .then(setTimeline)
+      .then((t) => {
+        writeCache(TIMELINE_CACHE_KEY, t);
+        setTimeline(t);
+      })
       .catch((e: Error) => setError(e.message));
   }, []);
 
@@ -1053,25 +1062,47 @@ function GroupStatsView({
   );
 }
 
+const statsCacheKey = (gid: number | "all", userIds: number[]) =>
+  `stats:summary:${gid}:${userIds.join(",")}`;
+
 export function Stats() {
-  const [stats, setStats] = useState<StatsSummary | null>(null);
-  const [memberOptions, setMemberOptions] = useState<{ user_id: number; username: string }[]>([]);
-  const [initialLoading, setInitialLoading] = useState(true);
+  // Stale-while-revalidate: previously viewed filter combinations render
+  // instantly from the session cache while a background refetch reconciles.
+  const [stats, setStats] = useState<StatsSummary | null>(
+    () => readCache<StatsSummary>(statsCacheKey("all", [])) ?? null
+  );
+  const [memberOptions, setMemberOptions] = useState<{ user_id: number; username: string }[]>(
+    () => readCache<StatsSummary>(statsCacheKey("all", []))?.users ?? []
+  );
+  const [initialLoading, setInitialLoading] = useState(() => !readCache(statsCacheKey("all", [])));
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [commentsItem, setCommentsItem] = useState<StatsTitle | null>(null);
   const [groupId, setGroupId] = useState<number | "all">("all");
-  const [groups, setGroups] = useState<{ id: number; name: string }[]>([]);
+  const [groups, setGroups] = useState<{ id: number; name: string }[]>(() =>
+    (readCache<WatchlistGroupsResponse>(WATCHLIST_GROUPS_KEY)?.groups ?? []).map((g) => ({
+      id: g.id,
+      name: g.name,
+    }))
+  );
   const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
   const requestRef = useRef(0);
 
   const loadStats = useCallback((gid: number | "all", userIds: number[]) => {
     const requestId = ++requestRef.current;
+    const cacheKey = statsCacheKey(gid, userIds);
+    const cached = readCache<StatsSummary>(cacheKey);
+    if (cached) {
+      setStats(cached);
+      setMemberOptions(cached.users);
+      setInitialLoading(false);
+    }
     setRefreshing(true);
     setError("");
     api
       .getStats(gid === "all" ? undefined : gid, userIds.length ? userIds : undefined)
       .then((data) => {
+        writeCache(cacheKey, data);
         if (requestId !== requestRef.current) return;
         setStats(data);
         setMemberOptions(data.users);
@@ -1090,7 +1121,10 @@ export function Stats() {
   useEffect(() => {
     api
       .watchlistGroups()
-      .then((r) => setGroups(r.groups.map((g) => ({ id: g.id, name: g.name }))))
+      .then((r) => {
+        writeCache(WATCHLIST_GROUPS_KEY, r);
+        setGroups(r.groups.map((g) => ({ id: g.id, name: g.name })));
+      })
       .catch((e: Error) => setError(e.message));
   }, []);
 

@@ -35,6 +35,13 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
+import { readCache, writeCache } from "../swrCache";
+import {
+  WATCHLIST_GROUPS_KEY,
+  watchlistItemsKey,
+  type WatchlistGroupsResponse,
+  type WatchlistItemsResponse,
+} from "../watchlistCache";
 import type { TmdbEpisode, UserInfo, WatchlistGroup, WatchlistItem, WatchlistUserWatch } from "../types";
 import { streamTargetFromWatchlistItem, type StreamTarget } from "./streamTarget";
 import { InLibraryChip } from "./InLibraryChip";
@@ -1419,12 +1426,27 @@ export function Watchlist({
 }) {
   const { push: pushToast } = useToast();
   const { obs } = usePlayback();
-  const [groups, setGroups] = useState<WatchlistGroup[]>([]);
-  const [ungroupedCounts, setUngroupedCounts] = useState({ to_watch: 0, watched: 0, needs_rating: 0 });
+  // Stale-while-revalidate: seed from the session cache so a revisited tab
+  // paints instantly, then loadGroups/loadItems refresh in the background.
+  const [groups, setGroups] = useState<WatchlistGroup[]>(
+    () => readCache<WatchlistGroupsResponse>(WATCHLIST_GROUPS_KEY)?.groups ?? []
+  );
+  const [ungroupedCounts, setUngroupedCounts] = useState(() => {
+    const cached = readCache<WatchlistGroupsResponse>(WATCHLIST_GROUPS_KEY)?.ungrouped_counts;
+    return {
+      to_watch: cached?.to_watch ?? 0,
+      watched: cached?.watched ?? 0,
+      needs_rating: cached?.needs_rating ?? 0,
+    };
+  });
   const [selectedGroupId, setSelectedGroupId] = useState<number>(initialGroupId ?? 0);
   const [groupQueueBusy, setGroupQueueBusy] = useState(false);
-  const [items, setItems] = useState<WatchlistItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<WatchlistItem[]>(
+    () => readCache<WatchlistItemsResponse>(watchlistItemsKey(initialGroupId ?? 0, section))?.items ?? []
+  );
+  const [loading, setLoading] = useState(
+    () => !readCache(watchlistItemsKey(initialGroupId ?? 0, section))
+  );
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -1497,6 +1519,7 @@ export function Watchlist({
     api
       .watchlistGroups()
       .then((r) => {
+        writeCache(WATCHLIST_GROUPS_KEY, r);
         setGroups(r.groups);
         setUngroupedCounts({
           to_watch: r.ungrouped_counts.to_watch,
@@ -1511,10 +1534,22 @@ export function Watchlist({
 
   const loadItems = useCallback(() => {
     const seq = ++loadItemsSeqRef.current;
-    setLoading(true);
+    const cacheKey = watchlistItemsKey(selectedGroupId, section);
+    const cached = readCache<WatchlistItemsResponse>(cacheKey);
+    if (cached) {
+      // Show the last-known list immediately and revalidate silently.
+      setItems(cached.items);
+      if (cached.counts) applyCounts(selectedGroupId, cached.counts);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     api
       .watchlistGroupItems(selectedGroupId, section)
       .then((r) => {
+        // The response is fresh for this key even if the user has already
+        // navigated away — cache it either way.
+        writeCache(cacheKey, r);
         if (seq !== loadItemsSeqRef.current) return;
         setItems(r.items);
         if (r.counts) applyCounts(selectedGroupId, r.counts);
@@ -1592,6 +1627,18 @@ export function Watchlist({
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
+  // Local mutations write through to the cache so navigating away and back
+  // never resurrects a deleted/stale row from an older snapshot.
+  const mutateItems = (update: (prev: WatchlistItem[]) => WatchlistItem[]) => {
+    const cacheKey = watchlistItemsKey(selectedGroupId, section);
+    setItems((prev) => {
+      const next = update(prev);
+      const cached = readCache<WatchlistItemsResponse>(cacheKey);
+      writeCache(cacheKey, { ...(cached ?? {}), items: next } as WatchlistItemsResponse);
+      return next;
+    });
+  };
+
   const onDragEnd = (e: DragEndEvent) => {
     const { active, over } = e;
     if (!over || active.id === over.id) return;
@@ -1600,17 +1647,17 @@ export function Watchlist({
     if (oldIdx < 0 || newIdx < 0) return;
     const prev = items;
     const next = arrayMove(items, oldIdx, newIdx);
-    setItems(next);
+    mutateItems(() => next);
     api
       .watchlistReorder(next.map((it, idx) => ({ id: it.id, sort_order: idx, group_id: selectedGroupId || null })))
       .catch((err: unknown) => {
-        setItems(prev);
+        mutateItems(() => prev);
         setError(err instanceof Error ? err.message : "Could not reorder watchlist");
       });
   };
 
   const updateItem = (updated: WatchlistItem) => {
-    setItems((prev) =>
+    mutateItems((prev) =>
       prev.map((it) => {
         if (it.id === updated.id) return updated;
         if (it.children) {
@@ -1625,6 +1672,7 @@ export function Watchlist({
     api
       .watchlistGroupItems(selectedGroupId, section)
       .then((r) => {
+        writeCache(watchlistItemsKey(selectedGroupId, section), r);
         setItems(r.items);
         if (r.counts) applyCounts(selectedGroupId, r.counts);
       })
@@ -1635,7 +1683,7 @@ export function Watchlist({
   };
 
   const removeFromView = (id: number) => {
-    setItems((prev) =>
+    mutateItems((prev) =>
       prev
         .filter((it) => it.id !== id)
         .map((it) =>

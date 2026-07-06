@@ -26,6 +26,7 @@ import { stripVisible } from "./stripVisibility";
 import { WatchlistAddProvider } from "./watchlistAddModal";
 import type { AppEvent, Job, MovieNightSession, PlayerState, PreflightStatus, QueueSnapshot, UserInfo } from "./types";
 import { clearStreamLaunchFromLocation, readStreamLaunchFromLocation, type StreamLaunch } from "./streamOpenUrl";
+import { prefetchWatchlist } from "./watchlistCache";
 import type { WsStatus } from "./ws";
 
 // Tab-level components are code-split: each becomes its own chunk, loaded on
@@ -159,6 +160,14 @@ function AppShell() {
     if (!authed) return;
     const t = setInterval(() => api.obsStatus().then(setObs).catch(() => {}), 5000);
     return () => clearInterval(t);
+  }, [authed]);
+
+  // Warm the watchlist cache shortly after login so the first visit to that
+  // tab paints instantly instead of starting from a cold fetch.
+  useEffect(() => {
+    if (!authed) return;
+    const t = window.setTimeout(() => void prefetchWatchlist(), 1500);
+    return () => window.clearTimeout(t);
   }, [authed]);
 
   const checklistBusyRef = useRef(false);
