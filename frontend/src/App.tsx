@@ -7,15 +7,16 @@ import {
   Loader2,
   LogOut,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pause,
   Settings as SettingsIcon,
-  Wifi,
-  WifiOff,
 } from "lucide-react";
 import { type Dispatch, lazy, type SetStateAction, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { useAppRealtime } from "./appRealtime";
 import { readNavFromLocation, writeNavToLocation, type AppTab, type WatchlistSection } from "./appNav";
+import { canControlPlayer } from "./capabilities";
 import { Login } from "./components/Login";
 import { PlaybackProvider } from "./components/PlaybackContext";
 import { SessionStrip } from "./components/SessionStrip";
@@ -23,7 +24,6 @@ import { TabSkeleton } from "./components/TabSkeleton";
 import { ToastProvider, useToast } from "./components/Toast";
 import { stripVisible } from "./stripVisibility";
 import { WatchlistAddProvider } from "./watchlistAddModal";
-import { fmtMs } from "./format";
 import type { AppEvent, Job, MovieNightSession, PlayerState, PreflightStatus, QueueSnapshot, UserInfo } from "./types";
 import { clearStreamLaunchFromLocation, readStreamLaunchFromLocation, type StreamLaunch } from "./streamOpenUrl";
 import type { WsStatus } from "./ws";
@@ -58,6 +58,23 @@ function AppShell() {
   const [tab, setTab] = useState<Tab>(() =>
     readStreamLaunchFromLocation() ? "add" : initialNav.tab
   );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem("mn_sidebar") === "collapsed";
+    } catch {
+      return false;
+    }
+  });
+  const toggleSidebarCollapsed = () =>
+    setSidebarCollapsed((v) => {
+      const next = !v;
+      try {
+        window.localStorage.setItem("mn_sidebar", next ? "collapsed" : "open");
+      } catch {
+        // Best effort — the choice still applies for this session.
+      }
+      return next;
+    });
   const [watchlistGroupId, setWatchlistGroupId] = useState<number | undefined>(initialNav.watchlistGroupId);
   const [watchlistSection, setWatchlistSection] = useState<WatchlistSection>(
     initialNav.watchlistSection ?? "to_watch"
@@ -221,10 +238,18 @@ function AppShell() {
 
   const playing = player?.media_state === "OBS_MEDIA_STATE_PLAYING";
   const paused = player?.media_state === "OBS_MEDIA_STATE_PAUSED" && !!queue.current;
-  const nowTitle = queue.current?.title;
-  const nowCursor = player?.cursor ?? 0;
   const showGoLiveWarning = (playing || paused) && obs.connected && !obs.streaming;
   const showSessionStrip = stripVisible(tab, session, player, activeDownloads);
+
+  const goLive = async () => {
+    try {
+      await api.obsStreamStart();
+      setObs((o) => ({ ...o, streaming: true }));
+      pushToast("Stream is live — friends can watch in VRChat", "success");
+    } catch (err: unknown) {
+      pushToast(err instanceof Error ? err.message : "Could not start stream", "error");
+    }
+  };
 
   return (
     <PlaybackProvider obs={obs} onGoToQueue={goToQueue}>
@@ -240,15 +265,13 @@ function AppShell() {
 
         <AppSidebar
           navOpen={navOpen}
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={toggleSidebarCollapsed}
           tab={tab}
           activeDownloads={activeDownloads}
           queue={queue}
           checklistIssues={checklistIssues}
           user={user}
-          nowTitle={nowTitle}
-          nowCursor={nowCursor}
-          playing={playing}
-          paused={paused}
           wsStatus={wsStatus}
           libraryScanning={libraryScanning}
           obs={obs}
@@ -258,7 +281,12 @@ function AppShell() {
 
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <MobileHeader tab={tab} onOpenNav={() => setNavOpen(true)} />
-          <PlaybackNotice paused={paused} showGoLiveWarning={showGoLiveWarning} />
+          <PlaybackNotice
+            paused={paused}
+            showGoLiveWarning={showGoLiveWarning}
+            canGoLive={!!user && canControlPlayer(user)}
+            onGoLive={goLive}
+          />
 
           <div
             className={`flex-1 overflow-y-auto ${
@@ -322,15 +350,13 @@ function AppShell() {
 
 function AppSidebar({
   navOpen,
+  collapsed,
+  onToggleCollapsed,
   tab,
   activeDownloads,
   queue,
   checklistIssues,
   user,
-  nowTitle,
-  nowCursor,
-  playing,
-  paused,
   wsStatus,
   libraryScanning,
   obs,
@@ -338,15 +364,14 @@ function AppSidebar({
   onLogout,
 }: {
   navOpen: boolean;
+  /** Desktop-only icon-rail mode; the mobile drawer always renders expanded. */
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   tab: Tab;
   activeDownloads: number;
   queue: QueueSnapshot;
   checklistIssues: number;
   user: UserInfo;
-  nowTitle?: string;
-  nowCursor: number;
-  playing: boolean;
-  paused: boolean;
   wsStatus: WsStatus;
   libraryScanning: boolean;
   obs: ObsState;
@@ -357,16 +382,25 @@ function AppSidebar({
     <aside
       className={`fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col border-r border-white/5 bg-ink-900/95 p-4 backdrop-blur transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0 lg:bg-ink-900/60 ${
         navOpen ? "translate-x-0" : "-translate-x-full"
-      }`}
+      } ${collapsed ? "lg:w-[4.5rem] lg:p-2" : "lg:w-64"}`}
     >
-      <div className="mb-8 flex items-center gap-3 px-2">
-        <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand-500">
+      <div className={`mb-6 flex items-center gap-3 px-2 ${collapsed ? "lg:flex-col lg:gap-2 lg:px-0" : ""}`}>
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand-500">
           <Clapperboard className="h-5 w-5 text-brand-ink" />
         </div>
-        <div>
+        <div className={`min-w-0 flex-1 ${collapsed ? "lg:hidden" : ""}`}>
           <div className="text-sm font-semibold leading-tight">Movie Night</div>
           <div className="text-xs text-slate-400">VRChat Control</div>
         </div>
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="hidden shrink-0 rounded-lg p-2 text-slate-500 transition-colors hover:bg-white/5 hover:text-slate-200 lg:block"
+        >
+          {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+          <span className="sr-only">{collapsed ? "Expand sidebar" : "Collapse sidebar"}</span>
+        </button>
       </div>
 
       <nav className="flex flex-1 flex-col gap-1">
@@ -375,6 +409,7 @@ function AppSidebar({
             key={item.id}
             item={item}
             active={tab === item.id}
+            collapsed={collapsed}
             activeDownloads={activeDownloads}
             queueCount={queue.items.length}
             checklistIssues={checklistIssues}
@@ -383,22 +418,23 @@ function AppSidebar({
         ))}
       </nav>
 
-      <div className="mt-4 space-y-2">
-        {nowTitle && (
-          <NowPlayingCard
-            title={nowTitle}
-            cursor={nowCursor}
-            playing={playing}
-            paused={paused}
-          />
-        )}
-        <div className="rounded-xl px-3 py-2 text-xs text-slate-400">@{user.username}</div>
-        <WsStatusBadge status={wsStatus} />
-        {libraryScanning && <ScanningChip />}
-        <ObsStatusBadge obs={obs} />
-        <button onClick={onLogout} className="btn-ghost w-full justify-start text-slate-400">
-          <LogOut className="h-4 w-4" /> Sign out
-        </button>
+      <div className="mt-4 space-y-1">
+        <SidebarStatus wsStatus={wsStatus} obs={obs} libraryScanning={libraryScanning} collapsed={collapsed} />
+        <div
+          className={`flex items-center justify-between gap-2 rounded-xl px-3 py-1 text-xs text-slate-400 ${
+            collapsed ? "lg:justify-center lg:px-0" : ""
+          }`}
+        >
+          <span className={`truncate ${collapsed ? "lg:hidden" : ""}`}>@{user.username}</span>
+          <button
+            onClick={onLogout}
+            title="Sign out"
+            className="shrink-0 rounded-lg p-2 text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-200"
+          >
+            <LogOut className="h-4 w-4" />
+            <span className="sr-only">Sign out</span>
+          </button>
+        </div>
       </div>
     </aside>
   );
@@ -407,6 +443,7 @@ function AppSidebar({
 function AppNavButton({
   item,
   active,
+  collapsed,
   activeDownloads,
   queueCount,
   checklistIssues,
@@ -414,76 +451,130 @@ function AppNavButton({
 }: {
   item: (typeof NAV)[number];
   active: boolean;
+  collapsed: boolean;
   activeDownloads: number;
   queueCount: number;
   checklistIssues: number;
   onNavigate: (next: Tab) => void;
 }) {
   const Icon = item.icon;
+  const showDownloadsBadge = item.id === "add" && activeDownloads > 0;
+  const showQueueBadge = item.id === "tonight" && queueCount > 0;
+  const showIssuesDot = item.id === "tonight" && checklistIssues > 0;
 
   return (
     <button
       onClick={() => onNavigate(item.id)}
-      className={`group flex items-center justify-between rounded-xl px-3 py-2.5 text-sm transition-colors ${
+      title={collapsed ? item.label : undefined}
+      className={`group relative flex items-center justify-between rounded-xl px-3 py-2.5 text-sm transition-colors ${
         active ? "bg-brand-500/15 text-white" : "text-slate-300 hover:bg-white/5"
-      }`}
+      } ${collapsed ? "lg:justify-center lg:px-0" : ""}`}
     >
       <span className="flex items-center gap-3">
         <Icon className={`h-[18px] w-[18px] ${active ? "text-brand-400" : "text-slate-400"}`} />
-        {item.label}
+        <span className={collapsed ? "lg:hidden" : ""}>{item.label}</span>
       </span>
-      {item.id === "add" && activeDownloads > 0 && (
-        <span className="chip bg-brand-500/20 text-brand-300">{activeDownloads}</span>
-      )}
-      {item.id === "tonight" && queueCount > 0 && (
-        <span className="chip bg-white/10 text-slate-300">{queueCount}</span>
-      )}
-      {item.id === "tonight" && checklistIssues > 0 && (
+      <span className={`flex items-center gap-1.5 ${collapsed ? "lg:hidden" : ""}`}>
+        {showDownloadsBadge && <span className="chip bg-brand-500/20 text-brand-300">{activeDownloads}</span>}
+        {showQueueBadge && <span className="chip bg-white/10 text-slate-300">{queueCount}</span>}
+        {showIssuesDot && (
+          <span
+            className="h-2 w-2 shrink-0 rounded-full bg-red-500 ring-2 ring-ink-900"
+            title={`${checklistIssues} checklist issue${checklistIssues === 1 ? "" : "s"}`}
+          />
+        )}
+      </span>
+      {/* Icon-rail mode: badges collapse to a corner dot */}
+      {collapsed && (showDownloadsBadge || showIssuesDot) && (
         <span
-          className="h-2 w-2 shrink-0 rounded-full bg-red-500 ring-2 ring-ink-900"
-          title={`${checklistIssues} checklist issue${checklistIssues === 1 ? "" : "s"}`}
+          className={`absolute right-1.5 top-1.5 hidden h-2 w-2 rounded-full lg:block ${
+            showIssuesDot ? "bg-red-500" : "bg-brand-400"
+          }`}
         />
       )}
     </button>
   );
 }
 
-function NowPlayingCard({
-  title,
-  cursor,
-  playing,
-  paused,
+/**
+ * One status line instead of the old stack of four pills: quiet single row
+ * when everything is fine, one named row per problem otherwise.
+ */
+function SidebarStatus({
+  wsStatus,
+  obs,
+  libraryScanning,
+  collapsed,
 }: {
-  title: string;
-  cursor: number;
-  playing: boolean;
-  paused: boolean;
+  wsStatus: WsStatus;
+  obs: ObsState;
+  libraryScanning: boolean;
+  collapsed: boolean;
 }) {
-  return (
-    <div className="rounded-xl bg-white/[0.03] px-3 py-2 text-xs">
-      <div className="text-[10px] uppercase tracking-wide text-slate-500">
-        {playing ? "Now playing" : paused ? "Paused" : "Queue"}
-      </div>
-      <div className="mt-0.5 truncate font-medium text-slate-200" title={title}>
-        {title}
-      </div>
-      {(playing || paused) && <div className="mt-0.5 tabular-nums text-slate-500">{fmtMs(cursor)}</div>}
-    </div>
-  );
-}
+  const problems: { key: string; label: string; tone: "amber" | "red"; busy?: boolean }[] = [];
+  if (wsStatus !== "connected") {
+    problems.push({
+      key: "ws",
+      label: wsStatus === "connecting" ? "Connecting live updates…" : "Reconnecting live updates…",
+      tone: "amber",
+      busy: true,
+    });
+  }
+  if (!obs.connected) problems.push({ key: "obs", label: "OBS offline", tone: "red" });
+  if (libraryScanning) problems.push({ key: "scan", label: "Scanning library…", tone: "amber", busy: true });
 
-function ObsStatusBadge({ obs }: { obs: ObsState }) {
+  const allGood = problems.length === 0;
+  const summary = allGood
+    ? obs.streaming
+      ? "All good · stream live"
+      : "All systems good"
+    : problems.map((p) => p.label).join(" · ");
+  const dotClass = problems.some((p) => p.tone === "red")
+    ? "bg-red-500"
+    : problems.length > 0
+      ? "bg-amber-400"
+      : "bg-emerald-400";
+
+  if (collapsed) {
+    return (
+      <>
+        {/* Mobile drawer keeps the expanded rows */}
+        <div className="lg:hidden">
+          <SidebarStatus wsStatus={wsStatus} obs={obs} libraryScanning={libraryScanning} collapsed={false} />
+        </div>
+        <div className="hidden justify-center py-2 lg:flex" title={summary}>
+          <span className={`h-2.5 w-2.5 rounded-full ${dotClass}`} />
+        </div>
+      </>
+    );
+  }
+
+  if (allGood) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs text-slate-400" title={summary}>
+        <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
+        {summary}
+      </div>
+    );
+  }
+
   return (
-    <div
-      className={`flex items-center gap-2 rounded-xl px-3 py-2 text-xs ${
-        obs.connected ? "bg-emerald-500/10 text-emerald-300" : "bg-red-500/10 text-red-300"
-      }`}
-    >
-      {obs.connected ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
-      <span>
-        OBS {obs.connected ? "connected" : "offline"}
-        {obs.connected && (obs.streaming ? " · live" : " · idle")}
-      </span>
+    <div className="space-y-1">
+      {problems.map((p) => (
+        <div
+          key={p.key}
+          className={`flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs ${
+            p.tone === "red" ? "bg-red-500/10 text-red-300" : "bg-amber-500/10 text-amber-300"
+          }`}
+        >
+          {p.busy ? (
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+          ) : (
+            <span className="h-2 w-2 shrink-0 rounded-full bg-current" />
+          )}
+          {p.label}
+        </div>
+      ))}
     </div>
   );
 }
@@ -504,27 +595,38 @@ function MobileHeader({ tab, onOpenNav }: { tab: Tab; onOpenNav: () => void }) {
 function PlaybackNotice({
   paused,
   showGoLiveWarning,
+  canGoLive,
+  onGoLive,
 }: {
   paused: boolean;
   showGoLiveWarning: boolean;
+  canGoLive: boolean;
+  onGoLive: () => void;
 }) {
   if (!paused && !showGoLiveWarning) return null;
 
   return (
     <div
-      className={`shrink-0 border-b px-4 py-2.5 text-sm ${
+      className={`shrink-0 border-b px-4 py-1.5 text-sm ${
         paused ? "border-amber-500/20 bg-amber-500/10 text-amber-200" : "border-brand-500/20 bg-brand-500/10 text-brand-200"
       }`}
     >
       {paused ? (
-        <span className="flex items-center gap-2">
+        <span className="flex min-h-8 items-center gap-2">
           <Pause className="h-4 w-4 shrink-0" />
           Intermission — playback is paused. Resume on Tonight when ready.
         </span>
       ) : (
-        <span>
-          Video is playing locally but the stream is not live — click <strong>Go live</strong> on Tonight so friends
-          see it in VRChat.
+        <span className="flex min-h-8 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <span>
+            Video is playing locally but the stream is not live
+            {canGoLive ? "." : " — ask the host to go live so friends see it in VRChat."}
+          </span>
+          {canGoLive && (
+            <button type="button" onClick={onGoLive} className="btn-primary shrink-0 px-3 py-1 text-xs">
+              Go live
+            </button>
+          )}
         </span>
       )}
     </div>
@@ -645,36 +747,3 @@ export default function App() {
   );
 }
 
-function ScanningChip() {
-  return (
-    <div className="flex items-center gap-2 rounded-xl bg-brand-500/10 px-3 py-2 text-xs text-brand-300">
-      <span className="h-2 w-2 animate-pulse rounded-full bg-brand-400" />
-      Scanning library…
-    </div>
-  );
-}
-
-function WsStatusBadge({ status }: { status: WsStatus }) {
-  if (status === "connected") {
-    return (
-      <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-        <span className="h-2 w-2 rounded-full bg-emerald-400" />
-        Live updates connected
-      </div>
-    );
-  }
-  if (status === "connecting") {
-    return (
-      <div className="flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-xs text-slate-400">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        Connecting…
-      </div>
-    );
-  }
-  return (
-    <div className="flex items-center gap-2 rounded-xl bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-      Reconnecting live updates…
-    </div>
-  );
-}
