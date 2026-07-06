@@ -16,6 +16,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   ChevronDown,
   ChevronUp,
+  Clapperboard,
   Copy,
   FastForward,
   GripVertical,
@@ -43,6 +44,7 @@ import { copyHlsUrl } from "../hlsUrl";
 import { fmtMs } from "../format";
 import type { AppEvent, MovieNightSession, PlayerState, PreflightStatus, QueueItem, QueueSnapshot, UserInfo } from "../types";
 import { ActivityFeed } from "./ActivityFeed";
+import { KebabMenu } from "./KebabMenu";
 import { PlaybackTracksPanel } from "./PlaybackTracksPanel";
 import { PreflightPanel } from "./PreflightPanel";
 import { SessionPanel } from "./SessionPanel";
@@ -94,6 +96,9 @@ export function Tonight({
   const [queueLoop, setQueueLoop] = useState(true);
   const [readinessOpen, setReadinessOpen] = useState(false);
   const [moreControlsOpen, setMoreControlsOpen] = useState(false);
+  // When something is already playing, the session starter collapses to a
+  // header button; this reopens the full panel on demand.
+  const [starterOpen, setStarterOpen] = useState(false);
   const volTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const canControl = canControlPlayer(user);
@@ -200,15 +205,52 @@ export function Tonight({
   const issues = preflight?.issues ?? [];
   const readinessReady = preflight ? preflight.checklist_ok : undefined;
 
+  // One status summary for the whole header: OBS connectivity wins, then the
+  // preflight checklist. Clicking it expands the full readiness section.
+  const statusChip = !obs.connected
+    ? { label: "OBS offline", cls: "bg-red-500/15 text-red-300" }
+    : readinessReady === undefined
+      ? { label: "Checking readiness…", cls: "bg-white/5 text-slate-400" }
+      : readinessReady
+        ? { label: "Ready", cls: "bg-emerald-500/15 text-emerald-300" }
+        : { label: `${issues.length} issue${issues.length === 1 ? "" : "s"}`, cls: "bg-amber-500/15 text-amber-300" };
+
+  const showStarterPanel = !!session || !cur || starterOpen;
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* Header: title + status summary on the left, stream actions on the right */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Tonight</h1>
-          <p className="mt-1 text-sm text-slate-400">Get ready, then host the show from here.</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+            <button
+              type="button"
+              onClick={() => setReadinessOpen((o) => !o)}
+              aria-expanded={readinessOpen}
+              className={`chip min-h-8 px-3 ${statusChip.cls}`}
+              title="Show the readiness checklist"
+            >
+              {statusChip.label}
+            </button>
+            {activeDownloads > 0 && (
+              <button type="button" onClick={onGoToAddMedia} className="chip bg-brand-500/20 text-brand-300">
+                {activeDownloads} downloading
+              </button>
+            )}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {!session && cur && (
+            <button
+              type="button"
+              onClick={() => setStarterOpen((o) => !o)}
+              aria-expanded={starterOpen}
+              className="btn-ghost text-sm"
+            >
+              <Clapperboard className="h-4 w-4" /> {starterOpen ? "Hide session setup" : "Start movie night"}
+            </button>
+          )}
           <button type="button" onClick={copyStreamUrl} className="btn-ghost text-sm">
             <Copy className="h-4 w-4" /> Copy HLS URL
           </button>
@@ -234,43 +276,6 @@ export function Tonight({
         </div>
       </div>
 
-      {/* Status chips */}
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span
-          className={`chip ${obs.connected ? "bg-emerald-500/15 text-emerald-300" : "bg-red-500/15 text-red-300"}`}
-        >
-          OBS {obs.connected ? (obs.streaming ? "connected · live" : "connected · idle") : "offline"}
-        </span>
-        <button
-          type="button"
-          onClick={() => setReadinessOpen((o) => !o)}
-          className={`chip min-h-11 px-3 ${
-            readinessReady === undefined
-              ? "bg-white/5 text-slate-400"
-              : readinessReady
-                ? "bg-emerald-500/15 text-emerald-300"
-                : "bg-amber-500/15 text-amber-300"
-          }`}
-        >
-          {readinessReady === undefined
-            ? "Checking readiness…"
-            : readinessReady
-              ? "Ready"
-              : `${issues.length} issue${issues.length === 1 ? "" : "s"}`}
-        </button>
-        {activeDownloads > 0 && (
-          <button type="button" onClick={onGoToAddMedia} className="chip bg-brand-500/20 text-brand-300">
-            {activeDownloads} downloading
-          </button>
-        )}
-      </div>
-
-      {!obs.connected && (
-        <div className="rounded-xl bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
-          OBS WebSocket is not connected. Check OBS is running, then review the readiness checklist below.
-        </div>
-      )}
-
       {/* Readiness section */}
       {(readinessOpen || (readinessReady === false && issues.length > 0)) && (
         <section className="space-y-3">
@@ -295,37 +300,41 @@ export function Tonight({
         </section>
       )}
 
-      {/* Session cockpit */}
-      <SessionPanel
-        session={session}
-        onSessionChange={onSessionChange}
-        player={player}
-        user={user}
-        libraryVersion={libraryVersion}
-      />
+      {/* Session cockpit — hero when idle or active; a header button while
+          something is playing without a session */}
+      {showStarterPanel && (
+        <SessionPanel
+          session={session}
+          onSessionChange={onSessionChange}
+          player={player}
+          user={user}
+          libraryVersion={libraryVersion}
+        />
+      )}
 
-      {/* Now playing / transport */}
+      <div className="grid items-start gap-6 xl:grid-cols-5">
+        <div className="min-w-0 space-y-6 xl:col-span-3">
+
+      {/* Now playing / transport — one flat surface */}
       <div className="card overflow-hidden p-5">
-        <div className="flex gap-4">
-          <div className="grid h-24 w-40 shrink-0 place-items-center overflow-hidden rounded-xl bg-ink-800">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+          <div className="grid h-20 w-32 shrink-0 place-items-center overflow-hidden rounded-xl bg-ink-800">
             {cur?.thumbnail ? (
               <img src={cur.thumbnail} alt="" className="h-full w-full object-cover" />
             ) : (
               <Play className="h-8 w-8 text-slate-600" />
             )}
           </div>
-          <div className="flex min-w-0 flex-1 flex-col justify-between">
-            <div>
-              <div className="text-xs uppercase tracking-wide text-slate-500">
-                {playing ? "Now playing" : cur ? "Paused" : "Nothing playing"}
-              </div>
-              <div className="mt-0.5 truncate text-lg font-medium" title={cur?.title}>
-                {cur?.title || "—"}
-              </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs uppercase tracking-wide text-slate-500">
+              {playing ? "Now playing" : cur ? "Paused" : "Nothing playing"}
+            </div>
+            <div className="mt-0.5 truncate text-lg font-medium" title={cur?.title}>
+              {cur?.title || "—"}
             </div>
 
             {/* Scrubber */}
-            <div>
+            <div className="mt-2">
               <div
                 onClick={seekFromBar}
                 className="group h-2.5 w-full cursor-pointer overflow-hidden rounded-full bg-white/5"
@@ -341,36 +350,38 @@ export function Tonight({
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Primary transport: play/pause + prev/next */}
-        <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
-          <Ctrl onClick={act("Previous", () => api.prev())} title="Previous" disabled={!canControl}>
-            <SkipBack className="h-5 w-5" />
-          </Ctrl>
-          <button
-            onClick={act(cur ? "Toggle playback" : "Play", () => (cur ? api.toggle() : api.play()))}
-            disabled={!canControl}
-            className="grid h-14 w-14 place-items-center rounded-full bg-brand-500 text-brand-ink transition-colors hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
-            title={!canControl ? "You don't have permission to control playback" : playing ? "Pause" : "Play"}
-          >
-            {playing ? <Pause className="h-6 w-6" /> : <Play className="h-6 w-6 translate-x-0.5" />}
-          </button>
-          <Ctrl onClick={act("Next", () => api.next())} title="Next" disabled={!canControl}>
-            <SkipForward className="h-5 w-5" />
-          </Ctrl>
-        </div>
-
-        <div className="mt-4 flex justify-center">
-          <button
-            type="button"
-            onClick={() => setMoreControlsOpen((o) => !o)}
-            className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400 hover:text-slate-200"
-          >
-            <Sliders className="h-3.5 w-3.5" />
-            More controls
-            {moreControlsOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-          </button>
+          {/* Primary transport, inline with the media info */}
+          <div className="flex shrink-0 items-center justify-center gap-2">
+            <Ctrl onClick={act("Previous", () => api.prev())} title="Previous" disabled={!canControl}>
+              <SkipBack className="h-5 w-5" />
+            </Ctrl>
+            <button
+              onClick={act(cur ? "Toggle playback" : "Play", () => (cur ? api.toggle() : api.play()))}
+              disabled={!canControl}
+              className="grid h-12 w-12 place-items-center rounded-full bg-brand-500 text-brand-ink transition-colors hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
+              title={!canControl ? "You don't have permission to control playback" : playing ? "Pause" : "Play"}
+            >
+              {playing ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5 translate-x-0.5" />}
+            </button>
+            <Ctrl onClick={act("Next", () => api.next())} title="Next" disabled={!canControl}>
+              <SkipForward className="h-5 w-5" />
+            </Ctrl>
+            <button
+              type="button"
+              onClick={() => setMoreControlsOpen((o) => !o)}
+              aria-expanded={moreControlsOpen}
+              title="More controls (skip, volume, loop, tracks)"
+              className={`grid h-11 w-11 place-items-center rounded-full transition-colors ${
+                moreControlsOpen
+                  ? "bg-white/10 text-brand-300"
+                  : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+              }`}
+            >
+              <Sliders className="h-4 w-4" />
+              <span className="sr-only">More controls</span>
+            </button>
+          </div>
         </div>
 
         {moreControlsOpen && (
@@ -441,8 +452,11 @@ export function Tonight({
         )}
       </div>
 
-      {/* Queue list */}
-      <section className="space-y-3">
+          <ActivityFeed liveEvent={activityEvent} />
+        </div>
+
+        {/* Queue list */}
+        <section className="min-w-0 space-y-3 xl:col-span-2">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">Up next · {items.length}</h2>
           {items.length > 0 && (
@@ -488,9 +502,8 @@ export function Tonight({
             </SortableContext>
           </DndContext>
         )}
-      </section>
-
-      <ActivityFeed liveEvent={activityEvent} />
+        </section>
+      </div>
     </div>
   );
 }
@@ -562,8 +575,8 @@ function Row({
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={`card overflow-hidden ${isDragging ? "opacity-60" : ""} ${
-        isCurrent ? "ring-1 ring-brand-500/60" : ""
+      className={`group card overflow-hidden ${isDragging ? "opacity-60" : ""} ${
+        isCurrent ? "border-l-2 border-l-brand-500" : ""
       }`}
     >
       <div className="flex items-center gap-2 p-2.5 sm:gap-3">
@@ -587,34 +600,67 @@ function Row({
           {item.queued_by && <div className="truncate text-[11px] text-slate-500">Queued by {item.queued_by}</div>}
         </div>
         <PrepareBadge status={item.prepare_status || ""} />
-        {canEditTracks && (
+        {/* Desktop: actions appear on hover or keyboard focus */}
+        <div className="hidden shrink-0 items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 sm:flex">
+          {canEditTracks && (
+            <button
+              type="button"
+              onClick={() => setTracksOpen((o) => !o)}
+              className={`shrink-0 rounded-lg p-2 hover:bg-white/10 ${
+                tracksOpen ? "text-brand-300" : "text-slate-400 hover:text-brand-300"
+              }`}
+              title={tracksOpen ? "Hide audio & subtitles" : "Audio & subtitles (before play)"}
+            >
+              <Languages className="h-4 w-4" />
+            </button>
+          )}
           <button
-            type="button"
-            onClick={() => setTracksOpen((o) => !o)}
-            className={`shrink-0 rounded-lg p-2 hover:bg-white/10 ${
-              tracksOpen ? "text-brand-300" : "text-slate-400 hover:text-brand-300"
-            }`}
-            title={tracksOpen ? "Hide audio & subtitles" : "Audio & subtitles (before play)"}
+            onClick={onPlay}
+            disabled={!canControl}
+            className="shrink-0 rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-brand-300 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Play this"
           >
-            <Languages className="h-4 w-4" />
+            <Play className="h-4 w-4" />
           </button>
-        )}
-        <button
-          onClick={onPlay}
-          disabled={!canControl}
-          className="shrink-0 rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-brand-300 disabled:cursor-not-allowed disabled:opacity-40"
-          title="Play this"
-        >
-          <Play className="h-4 w-4" />
-        </button>
-        <button
-          onClick={onRemove}
-          disabled={!canControl}
-          className="shrink-0 rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40"
-          title="Remove"
-        >
-          <X className="h-4 w-4" />
-        </button>
+          <button
+            onClick={onRemove}
+            disabled={!canControl}
+            className="shrink-0 rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Remove"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        {/* Touch: same actions behind the shared kebab */}
+        <div className="sm:hidden">
+          <KebabMenu
+            label="Queue item actions"
+            items={[
+              ...(canEditTracks
+                ? [
+                    {
+                      label: tracksOpen ? "Hide audio & subtitles" : "Audio & subtitles",
+                      icon: <Languages className="h-3.5 w-3.5" />,
+                      onClick: () => setTracksOpen((o) => !o),
+                    },
+                  ]
+                : []),
+              {
+                label: "Play this",
+                icon: <Play className="h-3.5 w-3.5" />,
+                onClick: onPlay,
+                disabled: !canControl,
+              },
+              {
+                label: "Remove",
+                icon: <X className="h-3.5 w-3.5" />,
+                onClick: onRemove,
+                destructive: true,
+                disabled: !canControl,
+              },
+            ]}
+          />
+        </div>
       </div>
       {tracksOpen && canEditTracks && (
         <div className="border-t border-white/5 px-2.5 pb-2.5">
