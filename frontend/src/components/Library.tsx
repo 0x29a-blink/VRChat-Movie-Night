@@ -24,6 +24,7 @@ import {
   filterAndSortLibrary,
   LIBRARY_FILTER_OPTIONS,
   LIBRARY_SORT_OPTIONS,
+  linkApplies,
   type LibraryFilter,
   type LibrarySort,
 } from "../libraryView";
@@ -343,11 +344,15 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
                             src={posterFor(item)}
                             alt=""
                             aria-hidden
+                            loading="lazy"
+                            decoding="async"
                             className="absolute inset-0 h-full w-full scale-110 object-cover opacity-35 blur-lg"
                           />
                           <img
                             src={posterFor(item)}
                             alt=""
+                            loading="lazy"
+                            decoding="async"
                             className="relative h-full w-full object-contain"
                           />
                         </>
@@ -361,7 +366,7 @@ export function Library({ version, user }: { version: number; user: UserInfo }) 
                           {libraryLinkLabel(item)}
                         </span>
                       )}
-                      {!item.linked && (
+                      {linkApplies(item) && !item.linked && (
                         <span className="absolute left-1.5 top-1.5 chip border border-amber-500/40 bg-ink-950/70 text-amber-300">
                           Unlinked
                         </span>

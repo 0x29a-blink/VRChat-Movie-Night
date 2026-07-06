@@ -114,6 +114,16 @@ describe("filterAndSortLibrary — state filters", () => {
     expect(out.map((i) => i.id)).toEqual([4, 3]);
   });
 
+  it("'needs_link' ignores YouTube/M3U8 items — linking doesn't apply to them", () => {
+    const mixed = [
+      makeItem({ id: 1, folder: "youtube", linked: false }),
+      makeItem({ id: 2, folder: "m3u8", linked: false }),
+      makeItem({ id: 3, folder: "torrents", linked: false }),
+    ];
+    const out = filterAndSortLibrary(mixed, "", "recent", "needs_link");
+    expect(out.map((i) => i.id)).toEqual([3]);
+  });
+
   it("'not_on_watchlist' keeps only linked items explicitly off the watchlist", () => {
     const out = filterAndSortLibrary(items, "", "recent", "not_on_watchlist");
     expect(out.map((i) => i.id)).toEqual([2]);

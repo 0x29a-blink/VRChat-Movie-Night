@@ -19,6 +19,10 @@ export default {
           500: v("ink-500"),
         },
         brand: {
+          // 200/300 are legacy light-tint shades still referenced by
+          // components; both resolve to the theme's light accent so no
+          // spelled shade silently compiles to nothing.
+          200: v("brand-400"),
           300: v("brand-400"),
           400: v("brand-400"),
           500: v("brand-500"),
@@ -33,14 +37,20 @@ export default {
           400: v("brand-400"),
           500: v("brand-500"),
         },
-        // Text scale. Overriding slate re-themes every existing text-slate-* usage.
+        // Text scale. Overriding slate re-themes every existing text-slate-*
+        // usage. The full 50–900 range is covered so no spellable slate shade
+        // falls through to Tailwind's blue-tinted default on warm themes.
         slate: {
+          50: v("tx-100"),
           100: v("tx-100"),
           200: v("tx-200"),
           300: v("tx-300"),
           400: v("tx-400"),
           500: v("tx-500"),
           600: v("tx-600"),
+          700: v("tx-600"),
+          800: v("tx-600"),
+          900: v("tx-600"),
         },
       },
       boxShadow: {

@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
 import { readCache, writeCache } from "../swrCache";
-import { WATCHLIST_GROUPS_KEY, type WatchlistGroupsResponse } from "../watchlistCache";
+import { WATCHLIST_GROUPS_KEY, fetchWatchlistGroups, type WatchlistGroupsResponse } from "../watchlistCache";
 import type {
   StatsNeedsRatingUser,
   StatsProfileTitle,
@@ -1071,9 +1071,6 @@ export function Stats() {
   const [stats, setStats] = useState<StatsSummary | null>(
     () => readCache<StatsSummary>(statsCacheKey("all", [])) ?? null
   );
-  const [memberOptions, setMemberOptions] = useState<{ user_id: number; username: string }[]>(
-    () => readCache<StatsSummary>(statsCacheKey("all", []))?.users ?? []
-  );
   const [initialLoading, setInitialLoading] = useState(() => !readCache(statsCacheKey("all", [])));
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -1087,6 +1084,8 @@ export function Stats() {
   );
   const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
   const requestRef = useRef(0);
+  // Derived, not state — it can never desync from the summary being shown.
+  const memberOptions = stats?.users ?? [];
 
   const loadStats = useCallback((gid: number | "all", userIds: number[]) => {
     const requestId = ++requestRef.current;
@@ -1094,7 +1093,6 @@ export function Stats() {
     const cached = readCache<StatsSummary>(cacheKey);
     if (cached) {
       setStats(cached);
-      setMemberOptions(cached.users);
       setInitialLoading(false);
     }
     setRefreshing(true);
@@ -1105,7 +1103,6 @@ export function Stats() {
         writeCache(cacheKey, data);
         if (requestId !== requestRef.current) return;
         setStats(data);
-        setMemberOptions(data.users);
       })
       .catch((e: Error) => {
         if (requestId !== requestRef.current) return;
@@ -1119,12 +1116,8 @@ export function Stats() {
   }, []);
 
   useEffect(() => {
-    api
-      .watchlistGroups()
-      .then((r) => {
-        writeCache(WATCHLIST_GROUPS_KEY, r);
-        setGroups(r.groups.map((g) => ({ id: g.id, name: g.name })));
-      })
+    fetchWatchlistGroups()
+      .then((r) => setGroups(r.groups.map((g) => ({ id: g.id, name: g.name }))))
       .catch((e: Error) => setError(e.message));
   }, []);
 

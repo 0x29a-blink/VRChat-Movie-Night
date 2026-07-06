@@ -26,6 +26,7 @@ import { stripVisible } from "./stripVisibility";
 import { WatchlistAddProvider } from "./watchlistAddModal";
 import type { AppEvent, Job, MovieNightSession, PlayerState, PreflightStatus, QueueSnapshot, UserInfo } from "./types";
 import { clearStreamLaunchFromLocation, readStreamLaunchFromLocation, type StreamLaunch } from "./streamOpenUrl";
+import { clearCache } from "./swrCache";
 import { prefetchWatchlist } from "./watchlistCache";
 import type { WsStatus } from "./ws";
 
@@ -76,6 +77,7 @@ function AppShell() {
       }
       return next;
     });
+  const goLiveBusyRef = useRef(false);
   const [watchlistGroupId, setWatchlistGroupId] = useState<number | undefined>(initialNav.watchlistGroupId);
   const [watchlistSection, setWatchlistSection] = useState<WatchlistSection>(
     initialNav.watchlistSection ?? "to_watch"
@@ -163,10 +165,14 @@ function AppShell() {
   }, [authed]);
 
   // Warm the watchlist cache shortly after login so the first visit to that
-  // tab paints instantly instead of starting from a cold fetch.
+  // tab paints instantly instead of starting from a cold fetch. Skipped when
+  // the user is already on the watchlist tab — its own mount fetch is in
+  // flight and would only be duplicated.
   useEffect(() => {
     if (!authed) return;
-    const t = window.setTimeout(() => void prefetchWatchlist(), 1500);
+    const t = window.setTimeout(() => {
+      if (readNavFromLocation().tab !== "watchlist") void prefetchWatchlist();
+    }, 1500);
     return () => window.clearTimeout(t);
   }, [authed]);
 
@@ -251,12 +257,16 @@ function AppShell() {
   const showSessionStrip = stripVisible(tab, session, player, activeDownloads);
 
   const goLive = async () => {
+    if (goLiveBusyRef.current) return;
+    goLiveBusyRef.current = true;
     try {
       await api.obsStreamStart();
       setObs((o) => ({ ...o, streaming: true }));
       pushToast("Stream is live — friends can watch in VRChat", "success");
     } catch (err: unknown) {
       pushToast(err instanceof Error ? err.message : "Could not start stream", "error");
+    } finally {
+      goLiveBusyRef.current = false;
     }
   };
 
@@ -285,7 +295,15 @@ function AppShell() {
           libraryScanning={libraryScanning}
           obs={obs}
           onNavigate={navigateTab}
-          onLogout={() => api.logout().then(() => { setAuthed(false); setUser(null); })}
+          onLogout={() =>
+            api.logout().then(() => {
+              // Drop all cached tab data so the next login on this page
+              // never paints the previous user's watchlist/stats.
+              clearCache();
+              setAuthed(false);
+              setUser(null);
+            })
+          }
         />
 
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -471,10 +489,19 @@ function AppNavButton({
   const showQueueBadge = item.id === "tonight" && queueCount > 0;
   const showIssuesDot = item.id === "tonight" && checklistIssues > 0;
 
+  const collapsedTitle = [
+    item.label,
+    showQueueBadge ? `${queueCount} queued` : "",
+    showDownloadsBadge ? `${activeDownloads} downloading` : "",
+    showIssuesDot ? `${checklistIssues} issue${checklistIssues === 1 ? "" : "s"}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
     <button
       onClick={() => onNavigate(item.id)}
-      title={collapsed ? item.label : undefined}
+      title={collapsed ? collapsedTitle : undefined}
       className={`group relative flex items-center justify-between rounded-xl px-3 py-2.5 text-sm transition-colors ${
         active ? "bg-brand-500/15 text-white" : "text-slate-300 hover:bg-white/5"
       } ${collapsed ? "lg:justify-center lg:px-0" : ""}`}
@@ -493,11 +520,11 @@ function AppNavButton({
           />
         )}
       </span>
-      {/* Icon-rail mode: badges collapse to a corner dot */}
-      {collapsed && (showDownloadsBadge || showIssuesDot) && (
+      {/* Icon-rail mode: badges collapse to a corner dot (issues > downloads > queue) */}
+      {collapsed && (showDownloadsBadge || showIssuesDot || showQueueBadge) && (
         <span
           className={`absolute right-1.5 top-1.5 hidden h-2 w-2 rounded-full lg:block ${
-            showIssuesDot ? "bg-red-500" : "bg-brand-400"
+            showIssuesDot ? "bg-red-500" : showDownloadsBadge ? "bg-brand-400" : "bg-slate-500"
           }`}
         />
       )}
@@ -544,30 +571,12 @@ function SidebarStatus({
       ? "bg-amber-400"
       : "bg-emerald-400";
 
-  if (collapsed) {
-    return (
-      <>
-        {/* Mobile drawer keeps the expanded rows */}
-        <div className="lg:hidden">
-          <SidebarStatus wsStatus={wsStatus} obs={obs} libraryScanning={libraryScanning} collapsed={false} />
-        </div>
-        <div className="hidden justify-center py-2 lg:flex" title={summary}>
-          <span className={`h-2.5 w-2.5 rounded-full ${dotClass}`} />
-        </div>
-      </>
-    );
-  }
-
-  if (allGood) {
-    return (
-      <div className="flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs text-slate-400" title={summary}>
-        <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
-        {summary}
-      </div>
-    );
-  }
-
-  return (
+  const rows = allGood ? (
+    <div className="flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs text-slate-400" title={summary}>
+      <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
+      {summary}
+    </div>
+  ) : (
     <div className="space-y-1">
       {problems.map((p) => (
         <div
@@ -585,6 +594,19 @@ function SidebarStatus({
         </div>
       ))}
     </div>
+  );
+
+  // Collapsed (desktop icon rail): a single status dot; the mobile drawer
+  // keeps the full rows regardless.
+  return (
+    <>
+      <div className={collapsed ? "lg:hidden" : ""}>{rows}</div>
+      {collapsed && (
+        <div className="hidden justify-center py-2 lg:flex" title={summary}>
+          <span className={`h-2.5 w-2.5 rounded-full ${dotClass}`} />
+        </div>
+      )}
+    </>
   );
 }
 

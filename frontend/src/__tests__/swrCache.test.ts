@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { clearCacheForTests, readCache, writeCache } from "../swrCache";
+import { clearCache, readCache, writeCache } from "../swrCache";
 import { WATCHLIST_GROUPS_KEY, watchlistItemsKey } from "../watchlistCache";
 
 describe("swrCache", () => {
-  beforeEach(clearCacheForTests);
+  beforeEach(clearCache);
 
   it("returns undefined for a cold key", () => {
     expect(readCache("nope")).toBeUndefined();

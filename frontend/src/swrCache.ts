@@ -15,6 +15,8 @@ export function writeCache<T>(key: string, value: T): void {
   cache.set(key, value);
 }
 
-export function clearCacheForTests(): void {
+/** Drops every cached entry — called on logout so the next user never sees
+ * the previous user's data, and by tests. */
+export function clearCache(): void {
   cache.clear();
 }

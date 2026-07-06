@@ -38,6 +38,7 @@ import { api } from "../api";
 import { readCache, writeCache } from "../swrCache";
 import {
   WATCHLIST_GROUPS_KEY,
+  fetchWatchlistGroups,
   watchlistItemsKey,
   type WatchlistGroupsResponse,
   type WatchlistItemsResponse,
@@ -1516,10 +1517,8 @@ export function Watchlist({
   );
 
   const loadGroups = useCallback(() => {
-    api
-      .watchlistGroups()
+    fetchWatchlistGroups()
       .then((r) => {
-        writeCache(WATCHLIST_GROUPS_KEY, r);
         setGroups(r.groups);
         setUngroupedCounts({
           to_watch: r.ungrouped_counts.to_watch,
@@ -1547,10 +1546,11 @@ export function Watchlist({
     api
       .watchlistGroupItems(selectedGroupId, section)
       .then((r) => {
-        // The response is fresh for this key even if the user has already
-        // navigated away — cache it either way.
-        writeCache(cacheKey, r);
+        // Only apply AND cache when still current: a local mutation or a
+        // newer load bumps the seq, and this response's snapshot predates it
+        // — writing it would resurrect deleted/stale rows on the next visit.
         if (seq !== loadItemsSeqRef.current) return;
+        writeCache(cacheKey, r);
         setItems(r.items);
         if (r.counts) applyCounts(selectedGroupId, r.counts);
       })
@@ -1630,6 +1630,9 @@ export function Watchlist({
   // Local mutations write through to the cache so navigating away and back
   // never resurrects a deleted/stale row from an older snapshot.
   const mutateItems = (update: (prev: WatchlistItem[]) => WatchlistItem[]) => {
+    // Any in-flight revalidation snapshotted the pre-mutation list — bump the
+    // seq so its response is discarded instead of resurrecting old rows.
+    loadItemsSeqRef.current += 1;
     const cacheKey = watchlistItemsKey(selectedGroupId, section);
     setItems((prev) => {
       const next = update(prev);

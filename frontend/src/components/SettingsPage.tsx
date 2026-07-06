@@ -657,6 +657,8 @@ export function SettingsPage({ user }: { user: UserInfo }) {
           <HlsCopyBlock displayHlsUrl={displayHlsUrl} onToast={pushToast} />
         </Section>
 
+        <AppearanceSection />
+
         <PasswordSection password={pw} message={pwMsg} onPasswordChange={setPw} onSubmit={changePw} />
       </div>
     );

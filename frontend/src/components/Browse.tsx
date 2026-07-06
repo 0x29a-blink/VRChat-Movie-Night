@@ -205,6 +205,7 @@ function CatalogPicker({
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const selected = catalogs.find((c) => catalogKey(c) === selectedKey) ?? catalogs[0] ?? null;
 
@@ -225,7 +226,10 @@ function CatalogPicker({
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -239,11 +243,13 @@ function CatalogPicker({
     onSelect(key);
     setOpen(false);
     setFilter("");
+    triggerRef.current?.focus();
   };
 
   return (
     <div ref={rootRef} className="relative">
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="listbox"
@@ -483,6 +489,9 @@ export function Browse({
   const [typeFilter, setTypeFilter] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
   const [catalogExtras, setCatalogExtras] = useState<Record<string, string>>({});
+  // Backend-flagged "best" anime catalog (curated Kitsu/MAL) — preferred by
+  // the anime tag chip over plain manifest order.
+  const [animeCatalogKey, setAnimeCatalogKey] = useState<string | null>(null);
   const [items, setItems] = useState<BrowseItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -530,6 +539,7 @@ export function Browse({
     try {
       const res = await api.browseCatalogs();
       setCatalogs(res.catalogs);
+      setAnimeCatalogKey(res.anime_catalog_key ?? null);
       // Default to the manifest's anime catalog when it has one (the most
       // common movie-night pick here), otherwise the first catalog.
       const key = res.anime_catalog_key || (res.catalogs[0] ? catalogKey(res.catalogs[0]) : "");
@@ -591,11 +601,15 @@ export function Browse({
   const selectTypeFilter = (type: string) => {
     setTypeFilter(type);
     if (!type) return;
-    // Keep the selection inside the tag: jump to the tag's first catalog
-    // unless the current one already matches.
+    // Keep the selection inside the tag: prefer the backend-flagged anime
+    // catalog when it belongs to this tag, otherwise the tag's first
+    // catalog — unless the current selection already matches.
     if (selectedCatalog?.type !== type) {
-      const first = catalogs.find((c) => c.type === type);
-      if (first) setSelectedCatalogKey(catalogKey(first));
+      const preferred = animeCatalogKey
+        ? catalogs.find((c) => catalogKey(c) === animeCatalogKey && c.type === type)
+        : undefined;
+      const target = preferred ?? catalogs.find((c) => c.type === type);
+      if (target) setSelectedCatalogKey(catalogKey(target));
     }
   };
 
@@ -909,7 +923,7 @@ export function Browse({
                   <div className="mt-1">
                     <CatalogPicker
                       catalogs={typeFilteredCatalogs}
-                      selectedKey={selectedCatalogKey || (catalogs[0] ? catalogKey(catalogs[0]) : "")}
+                      selectedKey={selectedCatalogKey}
                       onSelect={setSelectedCatalogKey}
                     />
                   </div>

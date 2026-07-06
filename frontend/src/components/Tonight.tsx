@@ -600,8 +600,10 @@ function Row({
           {item.queued_by && <div className="truncate text-[11px] text-slate-500">Queued by {item.queued_by}</div>}
         </div>
         <PrepareBadge status={item.prepare_status || ""} />
-        {/* Desktop: actions appear on hover or keyboard focus */}
-        <div className="hidden shrink-0 items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 sm:flex">
+        {/* Desktop: actions appear on hover or keyboard focus. The reveal
+            only applies on hover-capable devices — sm+ touch screens
+            (tablets) keep the actions permanently visible. */}
+        <div className="hidden shrink-0 items-center transition-opacity sm:flex [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:focus-within:opacity-100 [@media(hover:hover)]:group-hover:opacity-100">
           {canEditTracks && (
             <button
               type="button"

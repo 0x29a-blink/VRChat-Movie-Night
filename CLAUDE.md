@@ -34,10 +34,19 @@ obs-websocket(4455) → OBS → RTMP(1935) → MediaMTX → HLS(8888) → VRChat
 - `appRealtime.ts`, `ws.ts` — realtime/WebSocket hooks
 - `appNav.ts` — URL nav state; `AppTab` union (`tonight` is default/home) plus
   a legacy-alias contract so old links keep working: `downloads`→`add`,
-  `queue`→`tonight`, `checklist`→`tonight`
+  `queue`→`tonight`, `checklist`→`tonight`; Add Media sub-sources use
+  `?sub=` (+ `?src=` for Browse's inner Collections|AIOStreams choice), with
+  legacy `sub=catalogs/collections/anime` mapping into the merged `browse`
 - `capabilities.ts` — shared `canControlPlayer(user)` capability check
+- `theme.ts` — runtime theme system (Velvet default + Graphite/Ember/Projector);
+  themes are CSS-variable sets in `index.css` selected via `<html data-theme>`,
+  persisted in localStorage, picked in Settings → Appearance. Tailwind palette
+  (`tailwind.config.js`) resolves entirely to those variables — including the
+  overridden `slate` scale (themed text) and `accent` aliasing `brand`
 - `stripVisibility.ts`, `libraryView.ts` — pure helpers backing the strip and
-  Library search/sort, unit-tested without mounting components
+  Library search/sort/state-filters, unit-tested without mounting components
+- `swrCache.ts`, `watchlistCache.ts` — session-scoped stale-while-revalidate
+  cache seeding Watchlist/Stats tabs; cleared on logout
 - `types.ts` — shared TS types
 - `components/` — 34 UI components, notably:
   - `Tonight.tsx` — default home tab: readiness summary, session cockpit
@@ -45,7 +54,8 @@ obs-websocket(4455) → OBS → RTMP(1935) → MediaMTX → HLS(8888) → VRChat
   - `SessionStrip.tsx` — slim bottom strip on every other tab when a session
     is active or media is playing; now-playing + transport + tap-to-Tonight
   - `KebabMenu.tsx` — shared "⋯" overflow menu (portaled, keyboard/focus
-    aware); used by Watchlist rows and `DownloadJobCard`
+    aware); used by Watchlist rows, `DownloadJobCard`, Library cards, and
+    Tonight queue rows (touch)
   - `TabSkeleton.tsx` — per-tab loading skeleton shown while a lazy chunk loads
   - Browse, Search, Library, Downloads, Watchlist, Stats, SettingsPage, etc.
 - `__tests__/` — vitest specs for pure-logic modules

@@ -17,8 +17,14 @@ export const LIBRARY_FILTER_OPTIONS = [
 
 export type LibraryFilter = (typeof LIBRARY_FILTER_OPTIONS)[number]["value"];
 
+/** TMDB linking is only meaningful for movie/show files; YouTube and M3U8
+ * items are unlinked by nature and should not be flagged as needing work. */
+export function linkApplies(item: LibraryItem): boolean {
+  return item.folder === "torrents";
+}
+
 function matchesFilter(item: LibraryItem, filter: LibraryFilter): boolean {
-  if (filter === "needs_link") return !item.linked;
+  if (filter === "needs_link") return linkApplies(item) && !item.linked;
   if (filter === "not_on_watchlist") return !!item.linked && item.on_watchlist === false;
   return true;
 }
