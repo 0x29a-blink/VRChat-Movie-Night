@@ -1,22 +1,22 @@
-import { ChevronDown, ChevronRight, LayoutGrid, Layers, Link2, Loader2, Search as SearchIcon, Youtube } from "lucide-react";
+import { ChevronDown, ChevronRight, LayoutGrid, Link2, Loader2, Search as SearchIcon, Youtube } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { Job, UserInfo } from "../types";
 import { canLocalDownload } from "../localDownload";
 import type { StreamLaunch } from "../streamOpenUrl";
-import { readNavFromLocation, writeNavToLocation, type AddSource } from "../appNav";
+import { readNavFromLocation, writeNavToLocation, type AddBrowseSource, type AddSource } from "../appNav";
 import { ConfirmModal } from "./ConfirmModal";
 import { DownloadJobCard } from "./DownloadJobCard";
 import { Search } from "./Search";
 
-// Plan 026 (Add Media flatten): a single flat, URL-addressable source picker
-// replaces the old 4-level nesting (tab -> TABS -> Search mode -> Browse
-// source). Downloads.tsx is now the coordinator: it renders the picker and
-// routes to the right child, keeping Search.tsx/Browse.tsx internals intact.
+// Plan 026 (Add Media flatten) gave this tab a single flat, URL-addressable
+// source picker. UI v3 merges the old Catalogs and Collections entries — the
+// same browse component pointed at two data sources — into one Browse entry;
+// the Collections | AIOStreams choice lives inside Browse and round-trips
+// through the URL as `src`.
 const SOURCES: { id: AddSource; label: string; icon: typeof Youtube }[] = [
   { id: "search", label: "Search", icon: SearchIcon },
-  { id: "catalogs", label: "Catalogs", icon: LayoutGrid },
-  { id: "collections", label: "Collections", icon: Layers },
+  { id: "browse", label: "Browse", icon: LayoutGrid },
   { id: "youtube", label: "YouTube / URL", icon: Youtube },
   { id: "m3u8", label: "M3U8", icon: Link2 },
 ];
@@ -41,6 +41,9 @@ export function Downloads({
   const [source, setSource] = useState<AddSource>(
     () => (initialStreamLaunch ? "search" : readNavFromLocation().addSource ?? "search")
   );
+  const [browseSource, setBrowseSource] = useState<AddBrowseSource>(
+    () => readNavFromLocation().addBrowseSource ?? "collections"
+  );
   const [historyOpen, setHistoryOpen] = useState(false);
   const [clearing, setClearing] = useState<"completed" | "failed" | null>(null);
   const [clearBusy, setClearBusy] = useState(false);
@@ -51,7 +54,16 @@ export function Downloads({
 
   const selectSource = (next: AddSource) => {
     setSource(next);
-    writeNavToLocation({ tab: "add", addSource: next });
+    writeNavToLocation({
+      tab: "add",
+      addSource: next,
+      addBrowseSource: next === "browse" ? browseSource : undefined,
+    });
+  };
+
+  const selectBrowseSource = (next: AddBrowseSource) => {
+    setBrowseSource(next);
+    writeNavToLocation({ tab: "add", addSource: "browse", addBrowseSource: next });
   };
 
   const active = jobs.filter((j) => ACTIVE_STATUSES.has(j.status));
@@ -112,21 +124,12 @@ export function Downloads({
               allowLocalDownload={canLocalDownload(user)}
             />
           )}
-          {source === "catalogs" && (
+          {source === "browse" && (
             <Search
-              key="catalogs"
+              key="browse"
               initialMode="browse"
-              hideSourceToggle
-              browseSource="aiostreams"
-              allowLocalDownload={canLocalDownload(user)}
-            />
-          )}
-          {source === "collections" && (
-            <Search
-              key="collections"
-              initialMode="browse"
-              hideSourceToggle
-              browseSource="collections"
+              browseSource={browseSource}
+              onBrowseSourceChange={selectBrowseSource}
               allowLocalDownload={canLocalDownload(user)}
             />
           )}

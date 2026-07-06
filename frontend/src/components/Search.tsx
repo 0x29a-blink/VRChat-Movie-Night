@@ -87,21 +87,18 @@ export function Search({
   allowLocalDownload = false,
   initialMode = "search",
   browseSource,
-  hideSourceToggle = false,
+  onBrowseSourceChange,
 }: {
   initialStreamLaunch?: StreamLaunch | null;
   onInitialStreamOpenHandled?: () => void;
   allowLocalDownload?: boolean;
-  // Plan 026 (Add Media flatten): Downloads.tsx now owns the top-level
-  // Search|Catalogs|Collections|YouTube|M3U8 picker and remounts this
-  // component (via `key`), so the internal Search/Browse toggle was deleted
-  // entirely (plan 030 fix J) rather than kept behind a flag no consumer
-  // disables.
+  // Plan 026 (Add Media flatten): Downloads.tsx owns the top-level
+  // Search|Browse|YouTube|M3U8 picker and remounts this component (via
+  // `key`), so there is no internal Search/Browse toggle here.
   initialMode?: MoviesMode;
   browseSource?: "collections" | "aiostreams";
-  // Plan 030 (fix A): forwarded to Browse so its internal source switcher
-  // doesn't desync from the top-level segment/URL.
-  hideSourceToggle?: boolean;
+  /** Forwarded to Browse so its Collections|AIOStreams switch persists in the URL. */
+  onBrowseSourceChange?: (s: "collections" | "aiostreams") => void;
 }) {
   const { push: pushToast } = useToast();
   const [mode, setMode] = useState<MoviesMode>(initialMode);
@@ -653,7 +650,7 @@ export function Search({
             onPickTitle={(r) => pickTitle(r, { fromBrowse: true })}
             allowLocalDownload={allowLocalDownload}
             initialSource={browseSource}
-            hideSourceToggle={hideSourceToggle}
+            onSourceChange={onBrowseSourceChange}
           />
         </div>
       )}

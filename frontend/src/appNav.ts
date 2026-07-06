@@ -34,21 +34,25 @@ function parseAppTab(value: string | null): AppTab | null {
 export type WatchlistSection = "to_watch" | "watched";
 
 // AddSource backs the "Add Media" flattened source picker (plan 026):
-// a single segmented control replacing the old 4-level nesting
-// (tab -> Downloads TABS -> Search mode -> Browse source). Lives in the
-// URL as `sub` so `?tab=add&sub=catalogs` is a 1-click deep link.
+// a single segmented control. Lives in the URL as `sub` so
+// `?tab=add&sub=browse` is a 1-click deep link.
 //
-// Plan 031 (honest taxonomy): "browse" was actually TMDB collections and
-// "anime" was actually the general AIOStreams catalog browser (pre-filtered
-// to one catalog) — renamed to what they really are. Legacy `?sub=` values
-// are mapped in parseAddSource below so old deep links keep resolving.
-export type AddSource = "search" | "catalogs" | "collections" | "youtube" | "m3u8";
+// UI v3 merge: the old top-level "catalogs" and "collections" tabs were the
+// same browse component pointed at two sources, so they collapsed into one
+// "browse" tab with an internal Collections | AIOStreams switcher. The inner
+// source persists in the URL as `src`; legacy `?sub=` values (catalogs,
+// collections, and the even older browse/anime) are mapped below so old
+// deep links keep resolving to the right inner source.
+export type AddSource = "search" | "browse" | "youtube" | "m3u8";
+export type AddBrowseSource = "collections" | "aiostreams";
 
 export type NavState = {
   tab: AppTab;
   watchlistGroupId?: number;
   watchlistSection?: WatchlistSection;
   addSource?: AddSource;
+  /** Inner source of the merged Browse tab; only meaningful when addSource === "browse". */
+  addBrowseSource?: AddBrowseSource;
 };
 
 function parseWatchlistSection(value: string | null): WatchlistSection | undefined {
@@ -56,29 +60,40 @@ function parseWatchlistSection(value: string | null): WatchlistSection | undefin
   return undefined;
 }
 
-const VALID_ADD_SOURCES = new Set<AddSource>(["search", "catalogs", "collections", "youtube", "m3u8"]);
+const VALID_ADD_SOURCES = new Set<AddSource>(["search", "browse", "youtube", "m3u8"]);
 
-// Legacy `?sub=` values from before plan 031's rename, mapped to their
-// honest equivalents so old deep links/bookmarks still resolve.
-const LEGACY_ADD_SOURCE_ALIASES: Record<string, AddSource> = {
-  browse: "collections",
-  anime: "catalogs",
+// Legacy `?sub=` values, mapped to the merged Browse tab and (where the old
+// value implied one) its inner source.
+const LEGACY_ADD_SOURCE_ALIASES: Record<string, { source: AddSource; browse?: AddBrowseSource }> = {
+  catalogs: { source: "browse", browse: "aiostreams" },
+  collections: { source: "browse", browse: "collections" },
+  anime: { source: "browse", browse: "aiostreams" },
 };
 
-function parseAddSource(value: string | null): AddSource | undefined {
-  if (!value) return undefined;
-  if (LEGACY_ADD_SOURCE_ALIASES[value]) return LEGACY_ADD_SOURCE_ALIASES[value];
-  if (VALID_ADD_SOURCES.has(value as AddSource)) return value as AddSource;
+function parseAddSource(value: string | null): { source?: AddSource; browse?: AddBrowseSource } {
+  if (!value) return {};
+  const legacy = LEGACY_ADD_SOURCE_ALIASES[value];
+  if (legacy) return { source: legacy.source, browse: legacy.browse };
+  if (VALID_ADD_SOURCES.has(value as AddSource)) return { source: value as AddSource };
+  return {};
+}
+
+function parseAddBrowseSource(value: string | null): AddBrowseSource | undefined {
+  if (value === "collections" || value === "aiostreams") return value;
   return undefined;
 }
 
 export function readNavFromLocation(): NavState {
   const params = new URLSearchParams(window.location.search);
+  const { source: addSource, browse: legacyBrowse } = parseAddSource(params.get("sub"));
+  const addBrowseSource =
+    addSource === "browse" ? (parseAddBrowseSource(params.get("src")) ?? legacyBrowse) : undefined;
   return {
     tab: parseAppTab(params.get("tab")) ?? "tonight",
     watchlistGroupId: params.has("group") ? Number(params.get("group")) : undefined,
     watchlistSection: parseWatchlistSection(params.get("section")),
-    addSource: parseAddSource(params.get("sub")),
+    addSource,
+    addBrowseSource,
   };
 }
 
@@ -104,6 +119,11 @@ export function writeNavToLocation(state: NavState, preserveStreamParams = false
     params.set("sub", state.addSource);
   } else {
     params.delete("sub");
+  }
+  if (state.tab === "add" && state.addSource === "browse" && state.addBrowseSource) {
+    params.set("src", state.addBrowseSource);
+  } else {
+    params.delete("src");
   }
   const qs = params.toString();
   const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;

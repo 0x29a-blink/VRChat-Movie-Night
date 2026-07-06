@@ -1,5 +1,5 @@
-import { Check, Download, FolderOpen, HardDriveDownload, Layers, Loader2, Search, Sparkles } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { Check, ChevronDown, Download, FolderOpen, HardDriveDownload, Layers, Loader2, Search, Sparkles } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { saveBrowseTorboxItemToPc } from "../localDownload";
 import { useToast } from "./Toast";
@@ -151,14 +151,12 @@ function CatalogExtrasPanel({
   catalog,
   values,
   onChange,
-  onApply,
   loading,
   inline = false,
 }: {
   catalog: CatalogInfo;
   values: Record<string, string>;
   onChange: (name: string, value: string) => void;
-  onApply: () => void;
   loading: boolean;
   inline?: boolean;
 }) {
@@ -166,48 +164,50 @@ function CatalogExtrasPanel({
   const extras = visibleCatalogExtras(catalog);
   if (!extras.length) return null;
   return (
-    <div className={inline ? "space-y-3" : "card space-y-3 p-4"}>
-      <div className="text-xs font-medium text-slate-300">Catalog options</div>
-      <div className={`grid gap-3 ${inline ? "" : "sm:grid-cols-2"}`}>
-        {extras.map((extra) => (
-          <label key={extra.name} className="block text-xs text-slate-400">
-            {extra.name}
-            {extra.required ? " *" : ""}
-            <select
-              className="input mt-1"
-              value={values[extra.name] ?? ""}
-              onChange={(e) => onChange(extra.name, e.target.value)}
-            >
-              {(!extra.required || isGenreExtra(extra.name)) && <option value="">All</option>}
-              {extra.options.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
-          </label>
-        ))}
-      </div>
-      <button type="button" onClick={onApply} disabled={loading} className="btn-primary text-xs">
-        Apply filters
-      </button>
+    <div className={inline ? "grid gap-3" : "card grid gap-3 p-4 sm:grid-cols-2"}>
+      {extras.map((extra) => (
+        <label key={extra.name} className="block text-xs text-slate-400">
+          {extra.name}
+          {extra.required ? " *" : ""}
+          <select
+            className="input mt-1"
+            value={values[extra.name] ?? ""}
+            disabled={loading}
+            onChange={(e) => onChange(extra.name, e.target.value)}
+          >
+            {(!extra.required || isGenreExtra(extra.name)) && <option value="">All</option>}
+            {extra.options.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
+        </label>
+      ))}
     </div>
   );
 }
 
+/**
+ * Searchable catalog combobox: one input-height trigger showing the current
+ * catalog; the filterable list opens on demand instead of permanently
+ * occupying the page.
+ */
 function CatalogPicker({
   catalogs,
   selectedKey,
   onSelect,
-  filter,
-  onFilterChange,
 }: {
   catalogs: CatalogInfo[];
   selectedKey: string;
   onSelect: (key: string) => void;
-  filter: string;
-  onFilterChange: (value: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const selected = catalogs.find((c) => catalogKey(c) === selectedKey) ?? catalogs[0] ?? null;
+
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
     if (!q) return catalogs;
@@ -219,54 +219,90 @@ function CatalogPicker({
     );
   }, [catalogs, filter]);
 
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const pick = (key: string) => {
+    onSelect(key);
+    setOpen(false);
+    setFilter("");
+  };
+
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium text-slate-400">Catalog</span>
-        <span className="text-[11px] text-slate-500">
-          {filtered.length === catalogs.length
-            ? `${catalogs.length} total`
-            : `${filtered.length} of ${catalogs.length}`}
-        </span>
-      </div>
-      <div className="relative max-w-xl">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-        <input
-          type="search"
-          value={filter}
-          onChange={(e) => onFilterChange(e.target.value)}
-          placeholder="Filter catalogs…"
-          className="input py-2 pl-9 text-sm"
-        />
-      </div>
-      <div className="card max-h-52 overflow-y-auto rounded-xl border border-white/10 p-1">
-        {filtered.length === 0 ? (
-          <p className="px-3 py-6 text-center text-sm text-slate-500">No catalogs match your filter.</p>
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className="input flex items-center gap-2 text-left"
+      >
+        {selected ? (
+          <>
+            <span className="chip shrink-0 bg-white/5 text-slate-400">{selected.type}</span>
+            <span className="min-w-0 flex-1 truncate">{selected.name}</span>
+          </>
         ) : (
-          filtered.map((c) => {
-            const key = catalogKey(c);
-            const active = key === selectedKey;
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => onSelect(key)}
-                className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
-                  active
-                    ? "bg-brand-500/15 text-white ring-1 ring-brand-500/40"
-                    : "text-slate-300 hover:bg-white/5"
-                }`}
-              >
-                <span className="chip w-14 shrink-0 justify-center bg-white/5 text-slate-400">
-                  {c.type}
-                </span>
-                <span className="min-w-0 flex-1 truncate font-medium">{c.name}</span>
-                {active && <Check className="h-4 w-4 shrink-0 text-brand-400" />}
-              </button>
-            );
-          })
+          <span className="flex-1 text-slate-500">Pick a catalog…</span>
         )}
-      </div>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="card absolute z-20 mt-1 w-full min-w-64 border-white/10 p-1 shadow-xl">
+          <div className="relative p-1">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+            <input
+              type="search"
+              autoFocus
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder={`Filter ${catalogs.length} catalogs…`}
+              className="input py-2 pl-9 text-sm"
+            />
+          </div>
+          <div role="listbox" className="max-h-64 overflow-y-auto">
+            {filtered.length === 0 ? (
+              <p className="px-3 py-6 text-center text-sm text-slate-500">No catalogs match your filter.</p>
+            ) : (
+              filtered.map((c) => {
+                const key = catalogKey(c);
+                const active = key === selectedKey;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    onClick={() => pick(key)}
+                    className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                      active ? "bg-brand-500/15 text-white" : "text-slate-300 hover:bg-white/5"
+                    }`}
+                  >
+                    <span className="chip w-20 shrink-0 justify-center bg-white/5 text-slate-400">
+                      {c.type}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-medium">{c.name}</span>
+                    {active && <Check className="h-4 w-4 shrink-0 text-brand-400" />}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -410,20 +446,23 @@ export function Browse({
   onPickTitle,
   allowLocalDownload = false,
   initialSource = "collections",
-  hideSourceToggle = false,
+  onSourceChange,
 }: {
   onPickTitle: (r: SearchResult) => void;
   allowLocalDownload?: boolean;
-  // Plan 026 (Add Media flatten): let the coordinator (Downloads.tsx) land
-  // directly on a source, e.g. Catalogs, without the user re-clicking here.
+  // Let the coordinator (Downloads.tsx) land directly on a source from a
+  // deep link (?src=aiostreams) without the user re-clicking here.
   initialSource?: BrowseSource;
-  // Plan 030 (fix A): when the top-level segment already pins the source
-  // (Downloads.tsx's Catalogs/Collections segments), hide this internal
-  // switcher so it can't desync from the URL/segment.
-  hideSourceToggle?: boolean;
+  /** Notifies the coordinator so the inner source persists in the URL. */
+  onSourceChange?: (s: BrowseSource) => void;
 }) {
   const { push: pushToast } = useToast();
   const [source, setSource] = useState<BrowseSource>(initialSource);
+
+  const selectSource = (next: BrowseSource) => {
+    setSource(next);
+    onSourceChange?.(next);
+  };
   const [error, setError] = useState("");
   const [torboxDownloadBusy, setTorboxDownloadBusy] = useState<string | null>(null);
 
@@ -438,10 +477,12 @@ export function Browse({
   const [catalogs, setCatalogs] = useState<CatalogInfo[]>([]);
   const [loadingCatalogs, setLoadingCatalogs] = useState(false);
   const [selectedCatalogKey, setSelectedCatalogKey] = useState("");
-  const [catalogFilter, setCatalogFilter] = useState("");
+  // Tag filter over catalog `type` (anime / movie / DC / collections / …) —
+  // generalizes the old hardcoded "Anime" shortcut to every tag the
+  // manifest actually contains.
+  const [typeFilter, setTypeFilter] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
   const [catalogExtras, setCatalogExtras] = useState<Record<string, string>>({});
-  const [animeCatalogKey, setAnimeCatalogKey] = useState<string | null>(null);
   const [items, setItems] = useState<BrowseItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -489,10 +530,11 @@ export function Browse({
     try {
       const res = await api.browseCatalogs();
       setCatalogs(res.catalogs);
+      // Default to the manifest's anime catalog when it has one (the most
+      // common movie-night pick here), otherwise the first catalog.
       const key = res.anime_catalog_key || (res.catalogs[0] ? catalogKey(res.catalogs[0]) : "");
-      setAnimeCatalogKey(res.anime_catalog_key ?? null);
       setSelectedCatalogKey(key);
-      setCatalogFilter("");
+      setTypeFilter("");
       setCatalogSearch("");
       setCatalogExtras(defaultCatalogExtras(res.catalogs.find((c) => catalogKey(c) === key) ?? null));
       setItems([]);
@@ -538,10 +580,23 @@ export function Browse({
     [selectedCatalog, items.length, catalogSearch, catalogExtras]
   );
 
-  const openAnimeBrowse = () => {
-    setSource("aiostreams");
-    setCatalogFilter("anime");
-    if (animeCatalogKey) setSelectedCatalogKey(animeCatalogKey);
+  // Distinct catalog tags in manifest order, and the catalogs behind the
+  // currently selected tag.
+  const catalogTypes = useMemo(() => [...new Set(catalogs.map((c) => c.type))], [catalogs]);
+  const typeFilteredCatalogs = useMemo(
+    () => (typeFilter ? catalogs.filter((c) => c.type === typeFilter) : catalogs),
+    [catalogs, typeFilter]
+  );
+
+  const selectTypeFilter = (type: string) => {
+    setTypeFilter(type);
+    if (!type) return;
+    // Keep the selection inside the tag: jump to the tag's first catalog
+    // unless the current one already matches.
+    if (selectedCatalog?.type !== type) {
+      const first = catalogs.find((c) => c.type === type);
+      if (first) setSelectedCatalogKey(catalogKey(first));
+    }
   };
 
   useEffect(() => {
@@ -557,11 +612,6 @@ export function Browse({
     loadCatalogItems(false, "", extras);
   }, [selectedCatalogKey, catalogs.length, source]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    if (catalogFilter === "anime" && animeCatalogKey) {
-      setSelectedCatalogKey(animeCatalogKey);
-    }
-  }, [animeCatalogKey, catalogFilter]);
 
   useEffect(() => {
     if (source !== "aiostreams" || !selectedCatalog) return;
@@ -625,34 +675,31 @@ export function Browse({
 
   return (
     <div className="space-y-4">
-      {!hideSourceToggle && (
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => setSource("collections")}
-            className={source === "collections" ? "btn-primary" : "btn-ghost border border-white/10"}
-          >
-            <Layers className="mr-1.5 inline h-4 w-4" />
-            TMDB Collections
-          </button>
-          <button
-            type="button"
-            onClick={() => setSource("aiostreams")}
-            className={source === "aiostreams" ? "btn-primary" : "btn-ghost border border-white/10"}
-          >
-            <Sparkles className="mr-1.5 inline h-4 w-4" />
-            AIOStreams catalogs
-          </button>
-          <button
-            type="button"
-            onClick={openAnimeBrowse}
-            className="btn-ghost border border-brand-500/30 text-brand-400"
-            title="Open anime / Kitsu / MAL catalogs from your manifest"
-          >
-            Anime
-          </button>
-        </div>
-      )}
+      {/* Source switcher: two data sources, one segmented control */}
+      <div className="inline-flex rounded-xl border border-white/10 bg-white/5 p-0.5">
+        <button
+          type="button"
+          onClick={() => selectSource("collections")}
+          aria-pressed={source === "collections"}
+          className={`inline-flex items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-sm font-medium transition-colors ${
+            source === "collections" ? "bg-brand-500 text-brand-ink" : "text-slate-300 hover:text-slate-100"
+          }`}
+        >
+          <Layers className="h-4 w-4" />
+          Collections
+        </button>
+        <button
+          type="button"
+          onClick={() => selectSource("aiostreams")}
+          aria-pressed={source === "aiostreams"}
+          className={`inline-flex items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-sm font-medium transition-colors ${
+            source === "aiostreams" ? "bg-brand-500 text-brand-ink" : "text-slate-300 hover:text-slate-100"
+          }`}
+        >
+          <Sparkles className="h-4 w-4" />
+          AIOStreams
+        </button>
+      </div>
 
       {error && <div className="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</div>}
 
@@ -762,10 +809,6 @@ export function Browse({
 
       {source === "aiostreams" && (
         <>
-          <p className="text-xs text-slate-500">
-            Rows from catalog addons enabled in your AIOStreams config (Streaming Catalogs, TMDB
-            Collections, Marvel, etc.).
-          </p>
           {loadingCatalogs && (
             <div className="flex items-center gap-2 text-sm text-slate-400">
               <Loader2 className="h-4 w-4 animate-spin" /> Loading catalogs from manifest…
@@ -821,71 +864,81 @@ export function Browse({
 
           {!activeAioCollection && catalogs.length > 0 && (
             <>
-              {animeCatalogKey && (
+              {catalogTypes.length > 1 && (
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={openAnimeBrowse}
+                    onClick={() => selectTypeFilter("")}
                     className={`chip ${
-                      catalogFilter === "anime"
+                      !typeFilter
                         ? "bg-brand-500/25 text-brand-400"
-                        : "bg-white/5 text-slate-300 hover:bg-brand-500/20 hover:text-brand-400"
+                        : "bg-white/5 text-slate-300 hover:bg-white/10"
                     }`}
                   >
-                    Anime
+                    All
                   </button>
-                  {catalogFilter && (
+                  {catalogTypes.map((type) => (
                     <button
+                      key={type}
                       type="button"
-                      onClick={() => setCatalogFilter("")}
-                      className="chip bg-white/5 text-slate-300 hover:bg-white/10"
+                      onClick={() => selectTypeFilter(type)}
+                      className={`chip ${
+                        typeFilter === type
+                          ? "bg-brand-500/25 text-brand-400"
+                          : "bg-white/5 text-slate-300 hover:bg-white/10"
+                      }`}
                     >
-                      Clear filter
+                      {type}
                     </button>
-                  )}
+                  ))}
                 </div>
               )}
-              <CatalogPicker
-                catalogs={catalogs}
-                selectedKey={selectedCatalogKey || (catalogs[0] ? catalogKey(catalogs[0]) : "")}
-                onSelect={setSelectedCatalogKey}
-                filter={catalogFilter}
-                onFilterChange={setCatalogFilter}
-              />
-              {selectedCatalog && (
-                <div
-                  className={`grid gap-3 ${
-                    visibleCatalogExtras(selectedCatalog).length > 0
-                      ? "lg:grid-cols-2 lg:items-end"
-                      : ""
-                  }`}
-                >
-                  <label className="block text-xs text-slate-400">
-                    Search this catalog
-                    <div className="relative mt-1">
-                      <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-                      <input
-                        type="search"
-                        value={catalogSearch}
-                        onChange={(e) => setCatalogSearch(e.target.value)}
-                        placeholder="Title search (AIOStreams catalog extra)…"
-                        className="input py-2 pl-9 text-sm"
-                      />
-                    </div>
-                  </label>
+              <div
+                className={`grid gap-3 lg:items-end ${
+                  selectedCatalog && visibleCatalogExtras(selectedCatalog).length > 0
+                    ? "lg:grid-cols-3"
+                    : "lg:grid-cols-2"
+                }`}
+              >
+                <label className="block text-xs text-slate-400">
+                  Catalog
+                  <div className="mt-1">
+                    <CatalogPicker
+                      catalogs={typeFilteredCatalogs}
+                      selectedKey={selectedCatalogKey || (catalogs[0] ? catalogKey(catalogs[0]) : "")}
+                      onSelect={setSelectedCatalogKey}
+                    />
+                  </div>
+                </label>
+                <label className="block text-xs text-slate-400">
+                  Search this catalog
+                  <div className="relative mt-1">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+                    <input
+                      type="search"
+                      value={catalogSearch}
+                      onChange={(e) => setCatalogSearch(e.target.value)}
+                      placeholder="Title search…"
+                      className="input py-2 pl-9 text-sm"
+                    />
+                  </div>
+                </label>
+                {selectedCatalog && (
                   <CatalogExtrasPanel
                     catalog={selectedCatalog}
                     values={catalogExtras}
-                    onChange={(name, value) => setCatalogExtras((prev) => ({ ...prev, [name]: value }))}
-                    onApply={() => {
+                    onChange={(name, value) => {
+                      // Selects apply on change — no separate Apply step.
+                      const next = { ...catalogExtras, [name]: value };
+                      setCatalogExtras(next);
                       setItems([]);
-                      loadCatalogItems(false);
+                      loadCatalogItems(false, undefined, next);
                     }}
                     loading={loadingItems}
                     inline
                   />
-                </div>
-              )}
+                )}
+              </div>
               {loadingItems && items.length === 0 ? (
                 <div className="flex items-center gap-2 py-6 text-sm text-slate-400">
                   <Loader2 className="h-4 w-4 animate-spin" /> Loading titles…

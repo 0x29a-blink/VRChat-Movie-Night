@@ -105,33 +105,37 @@ describe("writeNavToLocation + readNavFromLocation round-trip", () => {
   });
 });
 
-describe("appNav addSource (plan 026 Add Media flatten)", () => {
-  it("deep-links ?tab=add&sub=catalogs", () => {
-    window.history.replaceState({}, "", "/?tab=add&sub=catalogs");
+describe("appNav addSource (UI v3 merged Browse tab)", () => {
+  it("deep-links ?tab=add&sub=browse", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=browse");
     const nav = readNavFromLocation();
     expect(nav.tab).toBe("add");
-    expect(nav.addSource).toBe("catalogs");
+    expect(nav.addSource).toBe("browse");
+    expect(nav.addBrowseSource).toBeUndefined();
   });
 
   it("parses every valid addSource value", () => {
-    for (const sub of ["search", "catalogs", "collections", "youtube", "m3u8"] as const) {
+    for (const sub of ["search", "browse", "youtube", "m3u8"] as const) {
       window.history.replaceState({}, "", `/?tab=add&sub=${sub}`);
       expect(readNavFromLocation().addSource).toBe(sub);
     }
   });
 
+  it("parses the inner browse source from ?src=", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=browse&src=aiostreams");
+    expect(readNavFromLocation().addBrowseSource).toBe("aiostreams");
+    window.history.replaceState({}, "", "/?tab=add&sub=browse&src=collections");
+    expect(readNavFromLocation().addBrowseSource).toBe("collections");
+  });
+
+  it("ignores src when sub is not browse", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=search&src=aiostreams");
+    expect(readNavFromLocation().addBrowseSource).toBeUndefined();
+  });
+
   it("falls back to undefined for a garbage sub value", () => {
     window.history.replaceState({}, "", "/?tab=add&sub=not-a-real-source");
     expect(readNavFromLocation().addSource).toBeUndefined();
-  });
-
-  it("ignores sub when the tab isn't add", () => {
-    window.history.replaceState({}, "", "/?tab=library&sub=catalogs");
-    const nav = readNavFromLocation();
-    expect(nav.tab).toBe("library");
-    // sub is still parsed regardless of tab (mirrors group/section parsing),
-    // but writeNavToLocation only persists it for the add tab.
-    expect(nav.addSource).toBe("catalogs");
   });
 
   it("round-trips addSource through writeNavToLocation", () => {
@@ -142,28 +146,53 @@ describe("appNav addSource (plan 026 Add Media flatten)", () => {
     expect(window.location.search).toContain("sub=youtube");
   });
 
-  it("drops sub from the URL when writing a non-add tab", () => {
-    window.history.replaceState({}, "", "/?tab=add&sub=catalogs");
+  it("round-trips the inner browse source through writeNavToLocation", () => {
+    writeNavToLocation({ tab: "add", addSource: "browse", addBrowseSource: "aiostreams" });
+    const nav = readNavFromLocation();
+    expect(nav.addSource).toBe("browse");
+    expect(nav.addBrowseSource).toBe("aiostreams");
+    expect(window.location.search).toContain("src=aiostreams");
+  });
+
+  it("drops sub and src from the URL when writing a non-add tab", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=browse&src=aiostreams");
     writeNavToLocation({ tab: "library" });
     expect(window.location.search).not.toContain("sub");
+    expect(window.location.search).not.toContain("src");
     expect(readNavFromLocation().addSource).toBeUndefined();
   });
 
   it("drops sub from the URL when writing the add tab without an addSource", () => {
-    window.history.replaceState({}, "", "/?tab=add&sub=catalogs");
+    window.history.replaceState({}, "", "/?tab=add&sub=browse");
     writeNavToLocation({ tab: "add" });
     expect(window.location.search).not.toContain("sub");
   });
 });
 
-describe("appNav legacy addSource aliases (plan 031 honest taxonomy)", () => {
-  it("maps legacy ?sub=browse to collections", () => {
-    window.history.replaceState({}, "", "/?tab=add&sub=browse");
-    expect(readNavFromLocation().addSource).toBe("collections");
+describe("appNav legacy addSource aliases", () => {
+  it("maps legacy ?sub=catalogs to browse/aiostreams", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=catalogs");
+    const nav = readNavFromLocation();
+    expect(nav.addSource).toBe("browse");
+    expect(nav.addBrowseSource).toBe("aiostreams");
   });
 
-  it("maps legacy ?sub=anime to catalogs", () => {
+  it("maps legacy ?sub=collections to browse/collections", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=collections");
+    const nav = readNavFromLocation();
+    expect(nav.addSource).toBe("browse");
+    expect(nav.addBrowseSource).toBe("collections");
+  });
+
+  it("maps ancient ?sub=anime to browse/aiostreams", () => {
     window.history.replaceState({}, "", "/?tab=add&sub=anime");
-    expect(readNavFromLocation().addSource).toBe("catalogs");
+    const nav = readNavFromLocation();
+    expect(nav.addSource).toBe("browse");
+    expect(nav.addBrowseSource).toBe("aiostreams");
+  });
+
+  it("explicit ?src= wins over a legacy alias hint", () => {
+    window.history.replaceState({}, "", "/?tab=add&sub=catalogs&src=collections");
+    expect(readNavFromLocation().addBrowseSource).toBe("collections");
   });
 });
