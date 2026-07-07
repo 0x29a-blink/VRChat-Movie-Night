@@ -8,7 +8,17 @@ import { MediaMtxSettings } from "./MediaMtxSettings";
 import { StreamQualitySettings } from "./StreamQualitySettings";
 import { ConfirmModal, PromptModal } from "./ConfirmModal";
 import { useToast } from "./Toast";
-import { THEMES, getStoredTheme, setTheme, type ThemeId } from "../theme";
+import {
+  THEMES,
+  getStoredCustom,
+  getStoredTheme,
+  previewSwatch,
+  setCustomTheme,
+  setTheme,
+  type CustomTheme,
+  type ThemeId,
+} from "../theme";
+import { isHexColor } from "../themeColors";
 
 const DEFAULT_HLS_REL_PATH = "live/vrstream/index.m3u8";
 const OBS_RTMP_SERVER_URL = "rtmp://localhost:1935/live";
@@ -436,47 +446,140 @@ const ADMIN_SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: "backup", label: "Backup" },
 ];
 
+function ThemeSwatch({ swatch }: { swatch: [string, string, string, string] }) {
+  return (
+    <span
+      className="grid h-10 w-14 shrink-0 grid-cols-2 overflow-hidden rounded-lg border border-white/10"
+      aria-hidden
+    >
+      {swatch.map((c, i) => (
+        <span key={i} style={{ background: c }} />
+      ))}
+    </span>
+  );
+}
+
 function AppearanceSection() {
   const [theme, setThemeState] = useState<ThemeId>(getStoredTheme);
+  const [custom, setCustom] = useState<CustomTheme>(getStoredCustom);
 
   const pick = (id: ThemeId) => {
     setTheme(id);
     setThemeState(id);
   };
 
+  const updateCustom = (patch: Partial<CustomTheme>) => {
+    const next = { ...custom, ...patch };
+    setCustom(next);
+    setCustomTheme(next); // persists + re-applies live if Custom is active
+    if (theme !== "custom") pick("custom");
+  };
+
+  const cardClass = (active: boolean) =>
+    `flex items-center gap-3 rounded-xl border p-3 text-left transition-colors ${
+      active
+        ? "border-brand-500/70 bg-brand-500/10 ring-1 ring-brand-500/40"
+        : "border-white/10 bg-white/5 hover:bg-white/10"
+    }`;
+
   return (
     <div className="card space-y-4 p-5">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">Theme</h2>
-      <p className="text-xs text-slate-500">Applies to this browser only — each member picks their own.</p>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div>
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">Theme</h2>
+        <p className="mt-1 text-xs text-slate-500">Applies to this browser only — each member picks their own.</p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {THEMES.map((t) => (
           <button
             key={t.id}
             type="button"
             onClick={() => pick(t.id)}
             aria-pressed={theme === t.id}
-            className={`flex items-center gap-3 rounded-xl border p-3 text-left transition-colors ${
-              theme === t.id
-                ? "border-brand-500/70 bg-brand-500/10 ring-1 ring-brand-500/40"
-                : "border-white/10 bg-white/5 hover:bg-white/10"
-            }`}
+            className={cardClass(theme === t.id)}
           >
-            <span
-              className="grid h-10 w-14 shrink-0 grid-cols-2 overflow-hidden rounded-lg border border-white/10"
-              aria-hidden
-            >
-              {t.swatch.map((c, i) => (
-                <span key={i} style={{ background: c }} />
-              ))}
-            </span>
+            <ThemeSwatch swatch={t.swatch} />
             <span className="min-w-0">
               <span className="block text-sm font-medium text-slate-100">{t.label}</span>
               <span className="block truncate text-xs text-slate-500">{t.description}</span>
             </span>
           </button>
         ))}
+
+        {/* Custom */}
+        <button
+          type="button"
+          onClick={() => pick("custom")}
+          aria-pressed={theme === "custom"}
+          className={cardClass(theme === "custom")}
+        >
+          <ThemeSwatch swatch={previewSwatch(custom.accent, custom.surface)} />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-slate-100">Custom</span>
+            <span className="block truncate text-xs text-slate-500">Pick your own accent &amp; background.</span>
+          </span>
+        </button>
       </div>
+
+      {theme === "custom" && (
+        <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <ColorField
+              label="Accent"
+              hint="Buttons, links, highlights"
+              value={custom.accent}
+              onChange={(accent) => updateCustom({ accent })}
+            />
+            <ColorField
+              label="Background"
+              hint="Works best with a dark color"
+              value={custom.surface}
+              onChange={(surface) => updateCustom({ surface })}
+            />
+          </div>
+          <p className="mt-3 text-xs text-slate-500">Changes preview live across the app as you pick.</p>
+        </div>
+      )}
     </div>
+  );
+}
+
+function ColorField({
+  label,
+  hint,
+  value,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  value: string;
+  onChange: (hex: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="text-xs font-medium text-slate-300">{label}</span>
+      <span className="mt-1 flex items-center gap-2">
+        <input
+          type="color"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="h-9 w-12 shrink-0 cursor-pointer rounded-lg border border-white/10 bg-transparent p-0.5"
+          aria-label={`${label} color`}
+        />
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => {
+            const v = e.target.value.trim();
+            if (isHexColor(v)) onChange(v.startsWith("#") ? v : `#${v}`);
+            else onChange(e.target.value);
+          }}
+          spellCheck={false}
+          className="input py-1.5 font-mono text-xs uppercase"
+        />
+      </span>
+      <span className="mt-1 block text-[10px] text-slate-500">{hint}</span>
+    </label>
   );
 }
 

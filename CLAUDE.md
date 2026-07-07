@@ -38,11 +38,16 @@ obs-websocket(4455) → OBS → RTMP(1935) → MediaMTX → HLS(8888) → VRChat
   `?sub=` (+ `?src=` for Browse's inner Collections|AIOStreams choice), with
   legacy `sub=catalogs/collections/anime` mapping into the merged `browse`
 - `capabilities.ts` — shared `canControlPlayer(user)` capability check
-- `theme.ts` — runtime theme system (Velvet default + Graphite/Ember/Projector);
-  themes are CSS-variable sets in `index.css` selected via `<html data-theme>`,
-  persisted in localStorage, picked in Settings → Appearance. Tailwind palette
-  (`tailwind.config.js`) resolves entirely to those variables — including the
-  overridden `slate` scale (themed text) and `accent` aliasing `brand`
+- `theme.ts` / `themeColors.ts` — runtime theme system. Four CSS themes
+  (Velvet default + Graphite/Ember/Projector) live as `<html data-theme>`
+  variable sets in `index.css`; ten more presets plus a user **Custom** theme
+  are *derived* — `themeColors.deriveThemeVars(accent, surface)` expands an
+  accent+surface hex pair into the full token set, injected as inline vars on
+  `<html>` (which override the CSS themes; cleared when switching back to a
+  CSS theme). Persisted in localStorage (`mn_theme`, `mn_theme_custom`),
+  picked in Settings → Appearance. Tailwind palette (`tailwind.config.js`)
+  resolves entirely to those variables — including the overridden `slate`
+  scale (themed text) and `accent` aliasing `brand`
 - `stripVisibility.ts`, `libraryView.ts` — pure helpers backing the strip and
   Library search/sort/state-filters, unit-tested without mounting components
 - `swrCache.ts`, `watchlistCache.ts` — session-scoped stale-while-revalidate
