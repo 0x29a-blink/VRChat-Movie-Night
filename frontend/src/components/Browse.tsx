@@ -1,5 +1,6 @@
 import { Check, ChevronDown, Download, FolderOpen, HardDriveDownload, Layers, Loader2, Search, Sparkles } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api";
 import { saveBrowseTorboxItemToPc } from "../localDownload";
 import { useToast } from "./Toast";
@@ -204,8 +205,9 @@ function CatalogPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
-  const rootRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const selected = catalogs.find((c) => catalogKey(c) === selectedKey) ?? catalogs[0] ?? null;
 
@@ -220,10 +222,30 @@ function CatalogPicker({
     );
   }, [catalogs, filter]);
 
+  // Portaled + fixed positioning (same approach as KebabMenu) so the dropdown
+  // floats above the page instead of extending its scroll height or being
+  // clipped by an ancestor. Reposition while open on scroll/resize.
+  useEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = triggerRef.current?.getBoundingClientRect();
+      if (r) setPos({ top: r.bottom + 6, left: r.left, width: r.width });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (e: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -247,7 +269,7 @@ function CatalogPicker({
   };
 
   return (
-    <div ref={rootRef} className="relative">
+    <>
       <button
         ref={triggerRef}
         type="button"
@@ -266,50 +288,58 @@ function CatalogPicker({
         )}
         <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
-      {open && (
-        <div className="card absolute z-20 mt-1 w-full min-w-64 border-white/10 p-1 shadow-xl">
-          <div className="relative p-1">
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-            <input
-              type="search"
-              autoFocus
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder={`Filter ${catalogs.length} catalogs…`}
-              className="input py-2 pl-9 text-sm"
-            />
-          </div>
-          <div role="listbox" className="max-h-64 overflow-y-auto">
-            {filtered.length === 0 ? (
-              <p className="px-3 py-6 text-center text-sm text-slate-500">No catalogs match your filter.</p>
-            ) : (
-              filtered.map((c) => {
-                const key = catalogKey(c);
-                const active = key === selectedKey;
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    role="option"
-                    aria-selected={active}
-                    onClick={() => pick(key)}
-                    className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
-                      active ? "bg-brand-500/15 text-white" : "text-slate-300 hover:bg-white/5"
-                    }`}
-                  >
-                    <span className="chip w-20 shrink-0 justify-center bg-white/5 text-slate-400">
-                      {c.type}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate font-medium">{c.name}</span>
-                    {active && <Check className="h-4 w-4 shrink-0 text-brand-400" />}
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="listbox"
+            className="card fixed z-50 min-w-64 border-white/10 p-1 shadow-xl"
+            style={{ top: pos.top, left: pos.left, width: pos.width }}
+          >
+            <div className="relative p-1">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+              <input
+                type="search"
+                autoFocus
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder={`Filter ${catalogs.length} catalogs…`}
+                className="input py-2 pl-9 text-sm"
+              />
+            </div>
+            <div className="max-h-64 overflow-y-auto">
+              {filtered.length === 0 ? (
+                <p className="px-3 py-6 text-center text-sm text-slate-500">No catalogs match your filter.</p>
+              ) : (
+                filtered.map((c) => {
+                  const key = catalogKey(c);
+                  const active = key === selectedKey;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      role="option"
+                      aria-selected={active}
+                      onClick={() => pick(key)}
+                      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                        active ? "bg-brand-500/15 text-white" : "text-slate-300 hover:bg-white/5"
+                      }`}
+                    >
+                      <span className="chip w-20 shrink-0 justify-center bg-white/5 text-slate-400">
+                        {c.type}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate font-medium">{c.name}</span>
+                      {active && <Check className="h-4 w-4 shrink-0 text-brand-400" />}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
 
