@@ -78,13 +78,13 @@ function AppShell() {
       return next;
     });
   const goLiveBusyRef = useRef(false);
-  // The app scrolls inside this panel (not the window), so its offset
-  // survives tab switches; reset it so each tab opens at the top instead of
-  // wherever the previous tab left off.
+  // The app scrolls inside this one panel (not the window), so its offset
+  // survives every in-place view change: switching tab, and — within
+  // Watchlist — switching group or To Watch/Watched. With cached lists
+  // painting instantly, a preserved offset reads as a jump into the middle
+  // of a different list. The reset effect (keyed on the full view signature)
+  // lives after the nav-state declarations below.
   const mainScrollRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    mainScrollRef.current?.scrollTo({ top: 0 });
-  }, [tab]);
   const [watchlistGroupId, setWatchlistGroupId] = useState<number | undefined>(initialNav.watchlistGroupId);
   const [watchlistSection, setWatchlistSection] = useState<WatchlistSection>(
     initialNav.watchlistSection ?? "to_watch"
@@ -107,6 +107,12 @@ function AppShell() {
   );
   const [preflight, setPreflight] = useState<PreflightStatus | null>(null);
   const [navOpen, setNavOpen] = useState(false);
+
+  // Reset the scroll panel to the top on any in-place view change (see the
+  // mainScrollRef comment above).
+  useEffect(() => {
+    mainScrollRef.current?.scrollTo({ top: 0 });
+  }, [tab, watchlistSection, watchlistGroupId]);
 
   const goToQueue = useCallback(() => setTab("tonight"), []);
   const goToAddMedia = useCallback(() => setTab("add"), []);
