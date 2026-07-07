@@ -52,12 +52,19 @@ export function KebabMenu({
   }, [open]);
 
   // Focus the first menu item when the menu opens; return focus to the
-  // trigger whenever it closes (Escape, item activation, outside click).
+  // trigger only when the menu actually closes (Escape, item activation,
+  // outside click) — NOT on initial mount. Focusing on mount would call
+  // .focus() (which scrolls the element into view) for every KebabMenu in a
+  // list, so a long list of rows would scroll itself to the last row on load
+  // and on every remount (tab/filter switch). preventScroll guards the
+  // legitimate close case too, since the trigger is already in view.
+  const hasOpenedRef = useRef(false);
   useEffect(() => {
     if (open) {
-      itemRefs.current[0]?.focus();
-    } else {
-      buttonRef.current?.focus();
+      hasOpenedRef.current = true;
+      itemRefs.current[0]?.focus({ preventScroll: true });
+    } else if (hasOpenedRef.current) {
+      buttonRef.current?.focus({ preventScroll: true });
     }
   }, [open]);
 
