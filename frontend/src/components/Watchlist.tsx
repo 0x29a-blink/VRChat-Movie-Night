@@ -1586,8 +1586,18 @@ export function Watchlist({
     onSectionChange?.(next);
   };
 
+  // Switching group or To Watch/Watched swaps the list under a preserved
+  // scroll offset (the cache paints instantly), which reads as random jumps
+  // — reset to the top of the tab on every switch after mount.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const skipScrollResetRef = useRef(true);
   useEffect(() => {
     setItemFilter("");
+    if (skipScrollResetRef.current) {
+      skipScrollResetRef.current = false;
+      return;
+    }
+    rootRef.current?.scrollIntoView({ block: "start" });
   }, [section, selectedGroupId]);
 
   useEffect(() => {
@@ -1762,7 +1772,7 @@ export function Watchlist({
     selectedGroupId === 0 ? ungroupedCounts : selectedGroup?.counts ?? { to_watch: 0, watched: 0, needs_rating: 0 };
 
   return (
-    <div className="space-y-4">
+    <div ref={rootRef} className="scroll-mt-4 space-y-4">
       <div>
         <h1 className="text-2xl font-semibold">Watchlist</h1>
         <p className="mt-1 text-sm text-slate-400">

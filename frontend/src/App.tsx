@@ -78,6 +78,13 @@ function AppShell() {
       return next;
     });
   const goLiveBusyRef = useRef(false);
+  // The app scrolls inside this panel (not the window), so its offset
+  // survives tab switches; reset it so each tab opens at the top instead of
+  // wherever the previous tab left off.
+  const mainScrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    mainScrollRef.current?.scrollTo({ top: 0 });
+  }, [tab]);
   const [watchlistGroupId, setWatchlistGroupId] = useState<number | undefined>(initialNav.watchlistGroupId);
   const [watchlistSection, setWatchlistSection] = useState<WatchlistSection>(
     initialNav.watchlistSection ?? "to_watch"
@@ -316,6 +323,7 @@ function AppShell() {
           />
 
           <div
+            ref={mainScrollRef}
             className={`flex-1 overflow-y-auto ${
               showSessionStrip
                 ? "pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-[calc(4rem+env(safe-area-inset-bottom))]"

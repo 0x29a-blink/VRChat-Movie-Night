@@ -92,7 +92,11 @@ export function Downloads({
         </p>
       </div>
 
-      <div className="card overflow-x-auto overflow-y-visible">
+      {/* No overflow classes here: overflow-x-auto forces overflow-y to
+          compute as auto too, turning the card into a scroll container that
+          clips the catalog combobox dropdown. The tab bar wraps, so nothing
+          needs horizontal scrolling. */}
+      <div className="card">
         <div className="flex flex-wrap border-b border-white/5">
           {SOURCES.map((s) => {
             const Icon = s.icon;
